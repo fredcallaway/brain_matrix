@@ -81,7 +81,7 @@ class BrainMatrix(dict):
     def __init__(self, image_type='pAgF', metric_functions={}, 
                  downsample=5, downsample_method='block_reduce',
                  blur=None, validation_trials=16, auto_save=True, 
-                 load=True, multi=True):
+                 multi=True, name=None):
         self.image_type = image_type
         self.downsample = downsample
         self.downsample_method = downsample_method
@@ -97,17 +97,16 @@ class BrainMatrix(dict):
         else:
             self.blur = round(2 * downsample / 6)
 
+        if name:
+            self.name = name
+        else:
+            self.name = time.strftime('analysis_from_%m-%d_%H-%M-%S')
+
         try:
             self.data = Dataset.load('data/dataset.pkl')
         except FileNotFoundError:
             self.data = _getdata()
 
-        self.file = ('cache/analyses/{image_type}_{downsample}_' +
-                     '{downsample_method}_{blur}_' +
-                     '{validation_trials}.bm').format(**self.__dict__)
-        os.makedirs('cache/analyses', exist_ok=True)
-        if load:
-            self._load()
 
     @property
     def features(self):
@@ -244,7 +243,7 @@ class BrainMatrix(dict):
 
             fig.canvas.mpl_connect('motion_notify_event', update_position)
 
-        plt.savefig('figs/{}-mds.png'.format(distance_measure))
+        plt.savefig('figs/{}_mds.png'.format(self.name))
 
     def plot_dendrogram(self, features=None, method='complete', distance_measure='emd'):
         """Plots a dendrogram using hierarchical clustering."""
@@ -256,7 +255,7 @@ class BrainMatrix(dict):
                      .format(cluster.hierarchy.inconsistent(clustering)))
         plt.tight_layout()
         os.makedirs('figs', exist_ok=True)
-        plt.savefig('figs/{}-dendrogram.png'.format(distance_measure))
+        plt.savefig('figs/{}_dendrogram.png'.format(self.name))
 
 
 
@@ -325,21 +324,11 @@ class BrainMatrix(dict):
                 del feature._lazy_image
             except AttributeError:
                 pass
-        joblib.dump(save, self.file, compress=3)
-        LOG.info('BrainMatrix saved to {}'.format(self.file))
 
-    def _load(self):
-        """Loads a cached BrainMatrix with same attribute values"""
-        LOG.debug('Attempting to load brain matrix')
-        try:
-            old = joblib.load(self.file)
-        except IOError:
-            # no cached BrainMatrix
-            pass
-        else:
-            shutil.copyfile(self.file, self.file+'BACKUP')
-            self.update(old)  # all distances in old are added to self
-            LOG.info('BrainMatrix loaded from file: {}'.format(self.file))
+        os.makedirs('cache/analyses', exist_ok=True)
+        file = ('cache/analyses/{}.pkl').format(self.name)
+        joblib.dump(save, file, compress=3)
+        LOG.info('BrainMatrix saved to {}'.format(file))
 
     def __missing__(self, key):
         # constructor will raise an error if key is not a valid feature
@@ -394,7 +383,6 @@ class MetaImage(dict):
                 raise ValueError('No feature "{}" found in dataset'.format(ns_name))
             # use neurosynth file, will download later if needed
             self.img_file = 'data/{feature}_{bm.image_type}.nii.gz'.format(**self.__dict__)
-
 
     @lazy_property
     def studies(self):
@@ -584,7 +572,24 @@ class Distance(dict):
 # HELPERS #
 ###########
 
+def load_brainmatrix(name):
+    """Loads a cached BrainMatrix with same attribute values.
 
+    name must refer to a .pkl file in cache/analysis"""
+    LOG.debug('Attempting to load brain matrix')
+
+    if name.endswith('.pkl'):
+        name = name[:-4]
+
+    file = 'cache/analyses/{}.pkl'.format(name)
+    try:
+        old = joblib.load(file)
+    except IOError:
+        # no cached BrainMatrix
+        pass
+    else:
+        LOG.info('BrainMatrix loaded from file: {}'.format(file))
+        return old
 
 def earth_movers_distance(image1, image2, downsample, downsample_method, blur):
     """Returns Earth Mover's Distance for image1 and image2"""
@@ -674,6 +679,9 @@ def _getdata():
 def _init_worker():
     signal.signal(signal.SIGINT, signal.SIG_IGN)  # ignore keyboard interrupt
 
+def _unique_name():
+    import date
+    name = 'analysis'
 
 #################
 # CUSTOM SCRIPT #
