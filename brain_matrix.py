@@ -13,7 +13,6 @@ import logging
 import multiprocessing as mp
 import os
 import random
-import shutil
 import signal
 import sys
 import time
@@ -26,13 +25,16 @@ from mpl_toolkits.mplot3d import proj3d
 import nibabel as nib
 import numpy as np
 import pandas as pd
-from scipy import stats, ndimage, spatial, cluster
-from skimage.measure import block_reduce
-from sklearn import cluster as skcluster, cross_decomposition, manifold
+from scipy import stats, cluster, ndimage
+import skimage.measure
+from sklearn import cluster as skcluster, manifold
 
 from neurosynth.base.dataset import Dataset
 from neurosynth.analysis.meta import MetaAnalysis
-import pyemd
+
+from distance import euclidean_emd
+from utils import lazy_property
+
 
 labels_and_points = []  # a hack to get around namespace problems
 
@@ -68,6 +70,8 @@ class BrainMatrix(dict):
     method.
 
     Attributes:
+      metric: 'emd' or a function that takes two 3D arrays as argument
+        and returns a float.
       image_type (str): the statistical method for creating intensity values
         in the image.
       downsample (float/int): the factor by which images are downsampled before
@@ -77,20 +81,26 @@ class BrainMatrix(dict):
       blur (float/int): the sigma value for the gaussian filter applied to
         images before downsample when using block_reduce
       validation_trials (int): number of trials to use in cross validation
+      auto_save (bool): should we save periodically during long computations?
+      multi (bool): use multiprocessing?
+      name (str): analysis is saved to cache/analyses/name.pkl, and can
+        be loaded with load_brainmatrix(name)
+
     """
-    def __init__(self, image_type='pAgF', metric_functions={}, 
-                 downsample=5, downsample_method='block_reduce',
-                 blur=None, validation_trials=16, auto_save=True, 
-                 multi=True, name=None):
+    def __init__(self, metric='emd', image_type='pAgF', validation_trials=16,
+                 downsample=8, downsample_method='block_reduce', blur=None,
+                 auto_save=True, multi=True, name=None):
         self.image_type = image_type
         self.downsample = downsample
         self.downsample_method = downsample_method
         self.validation_trials = validation_trials
         self.auto_save = auto_save
+        self.multi = multi
 
-        default_metrics = {'emd': earth_movers_distance}
-        metric_functions.update(default_metrics)
-        self.metric_functions = metric_functions
+        if metric == 'emd':
+            self.metric = euclidean_emd
+        elif callable(metric):
+            self.metric = metric
 
         if blur:
             self.blur = blur
@@ -112,7 +122,7 @@ class BrainMatrix(dict):
     def features(self):
             return self.keys()
 
-    def to_dataframe(self, features=None, metric='emd'):
+    def to_dataframe(self, features=None):
         """Returns distance matrix for `features` as a pandas dataframe.
 
         If features is None, use all features in self.
@@ -120,15 +130,15 @@ class BrainMatrix(dict):
         if not features:
             features = self.features
 
-        df = defaultdict(dict)
+        data = defaultdict(dict)
         for f1 in features:
-            for f2 in self.features:
-                df[f1][f2] = self[f1][f2][metric]
+            for f2 in features:
+                data[f1][f2] = self[f1][f2].distance
 
-        df = pd.DataFrame.from_dict(df)
+        df = pd.DataFrame.from_dict(data)
         return df
 
-    def compute_distances(self, features, metric):
+    def compute_distances(self, features):
         """Computes distance between each feature in `features`.
 
         Only computes distances that have not already been computed. Utilizes
@@ -136,77 +146,68 @@ class BrainMatrix(dict):
         with size equal to the number of cpu cores on the machine. Distances
         will be logged as they are computed.
         """        
-        # TODO: make sure nibabel proxy arrays aren't slowing me down
-        metric_func = self.metric_functions[metric]
+        # TODO: make sure nibabel proxy arrays aren't slowing things down
         dists_to_compute = []
         for i, f1 in enumerate(features):
             for f2 in features[i+1:]:
-                distance = self[f1][f2]
-                if not distance[metric]:
-                    dists_to_compute.append(distance)
+                distance_value = self[f1][f2].distance
+                if distance_value is None:
+                    dists_to_compute.append(self[f1][f2])
 
         LOG.warning('Computing {} distances'.format(len(dists_to_compute)))
         img_pairs = [(d.image1.image, d.image2.image) for d in dists_to_compute]
-        pool = mp.Pool(initializer=_init_worker)
 
-        argss = [(img1, img2, self.downsample, self.downsample_method, self.blur)
-                   for (img1, img2) in img_pairs]
-        results = [pool.apply_async(metric_func, args) for args in argss]
-        
-        for i, dist in enumerate(dists_to_compute):
-            # get the results as they are returned
-            start = time.time()
+        if not self.multi:
+            # the simple way...
+            for i, dist in enumerate(dists_to_compute):
+                dist.distance = self.metric(*img_pairs[i])
+        else:
+            # equivalent to above, but with multiprocessing
+            pool = mp.Pool()
+            results = [pool.apply_async(self.metric, pair) for pair in img_pairs]
 
-            while not results[i].ready():
-                # periodically check for a keyboard interrupt
-                try:
-                    time.sleep(10)
-                except KeyboardInterrupt:
-                    IPython.embed()  # interactive shell
-                    terminate = input('Terminate computation? (yes|[no]): ')
-                    if terminate == 'yes':
-                        pool.terminate()
-                        pool.join()
-                        raise KeyboardInterrupt()
+            for i, dist in enumerate(dists_to_compute):
+                start = time.time()
+                # This line blocks until the result is returned by the worker.
+                dist.distance = results[i].get()
 
-            dist[metric] = results[i].get()  # save value in the Distance object
+                f1, f1 = dist.image1.feature, dist.image2.feature
+                elapsed = time.time() - start
+                LOG.info(('{f1} - {f2} [{self.metric}]: {dist.distance}' +
+                          '\t({elapsed} seconds)').format(**locals()))
 
-            f1, f1 = dist.image1.feature, dist.image2.feature
-            elapsed = time.time() - start
-            LOG.info(('{f1} - {f2} [{metric}]: {dist[metric]}' +
-                      '\t({elapsed} seconds)').format(**locals()))
-
-            if i % 8 == 7:
-                LOG.info('{} out of {} distances computed'.format(i, len(dists_to_compute)))
-                if self.auto_save:
-                    # save data periodically to prevent catastrophic loss
-                    # in the event of a crash
-                    self.save()
+                if i % 8 == 7:
+                    LOG.info('{} out of {} distances computed'.format(i, len(dists_to_compute)))
+                    if self.auto_save:
+                        # Save data periodically to prevent catastrophic loss
+                        # in the event of a crash.
+                        self.save()
+            pool.close()
         if self.auto_save:
             self.save()
-        pool.close()
 
-    def plot(self, features=None, dim=2, clustering='agglomerative', clusters = 4,
-             distance_measure='emd'):
+    def plot(self, features=None, interactive=False, dim=2, clustering=True, clusters=4):
         """Saves a scatterplot of the features projected onto 2 dimensions.
 
-        Uses MDS to project features based on their distances from each other.
-        If features is not None, only plot those that are given.
+        Uses MDS to project features onto a 2 or 3 dimensional based on their
+        distances from each other. If features is not None, only plot those
+        that are given. If interactive is truthy, an interactive plot will pop up. This is
+        recommended for 3D graphs which are hard to make sense of without
+        rotating the graph.
         """
-        df = self.to_dataframe(features=features, metric=distance_measure)
+        df = self.to_dataframe(features)
         if features:
             df = df[features].ix[features]
         else:
             features = df.index
             
 
-        if clustering is 'agglomerative':
-            clustering = skcluster.AgglomerativeClustering(linkage='complete', 
-                                                 affinity='precomputed', n_clusters=clusters)
+        if clustering:
+            clustering = skcluster.AgglomerativeClustering(
+                            linkage='complete', affinity='precomputed', n_clusters=clusters)
             assignments = clustering.fit_predict(df)
         
         if dim == 2:
-            # MDS to get points
             mds = manifold.MDS(n_components=2, eps=1e-9, dissimilarity="precomputed")
             points = mds.fit(df).embedding_
 
@@ -214,16 +215,18 @@ class BrainMatrix(dict):
             for label, x, y in zip(features, points[:, 0], points[:, 1]):
                 plt.annotate(label, xy = (x, y), xytext = (-5, 5),
                              textcoords = 'offset points', ha = 'right', va = 'bottom')
-        elif dim == 3:
+        else:
+            if dim is not 3:
+                raise ValueError('dim must be 2 or 3. {} provided'.format(dim))
             mds = manifold.MDS(n_components=3, eps=1e-9, dissimilarity="precomputed")
             points = mds.fit(df).embedding_
 
             fig = plt.figure()
             ax = fig.add_subplot(111, projection = '3d')
             xs, ys, zs = np.split(points, 3, axis=1)
-
             ax.scatter(xs,ys,zs, c=assignments, s=40)
 
+            # make labels move as the user rotates the graph
             global labels_and_points  # a hack for namespace problems
             labels_and_points = []
             for feature, x, y, z in zip(features, xs, ys, zs):
@@ -243,77 +246,36 @@ class BrainMatrix(dict):
 
             fig.canvas.mpl_connect('motion_notify_event', update_position)
 
-        plt.savefig('figs/{}_mds.png'.format(self.name))
+        os.makedirs('figs', exist_ok=True)
+        plt.savefig('figs/{}_mds{}.png'.format(self.name, dim))
+        if interactive:
+            plt.show()
 
-    def plot_dendrogram(self, features=None, method='complete', distance_measure='emd'):
-        """Plots a dendrogram using hierarchical clustering."""
-        df = self.to_dataframe(features, distance_measure)
+    def plot_dendrogram(self, features=None, method='complete'):
+        """Plots a dendrogram using hierarchical clustering.
+
+        see scipy.cluster.hierarchy.linkage for details regarding
+        possible clustering methods.
+        """
+        df = self.to_dataframe(features)
         clustering = cluster.hierarchy.linkage(df, method=method)
         cluster.hierarchy.dendrogram(clustering, orientation='left', truncate_mode=None,
                                      labels=features, color_threshold=0)
         LOG.critical('DENDROGRAM INCONSISTENCY: {}'
                      .format(cluster.hierarchy.inconsistent(clustering)))
         plt.tight_layout()
+
         os.makedirs('figs', exist_ok=True)
         plt.savefig('figs/{}_dendrogram.png'.format(self.name))
 
 
-
-    def canonical_correlation_analysis(self, features):
-        studies = sum([self[f].studies for f in features], [])  # concatenates paper lists
-        studies = list(set(studies))  # remove duplicates
-
-        feature_table = self.data.feature_table.data  # studies X features
-        feature_table = feature_table[features]  # keep only our features
-        feature_table = feature_table.ix[studies]  # keep only our studies
-        # combine groups of studies into studygroups?
-
-
-        def get_images(studies):
-            masked_images = self.data.get_image_data(ids=studies).T  # studies X voxels
-            # neurosynth removes non-brain voxels from flattened images
-            # so we have to put them back to do block_reduce
-            images = [self.data.masker.unmask(img) 
-                      for img in masked_images]  # a list of 3d images
-            images = [_block_reduce(img, self.downsample, self.blur) for img in images]
-            images = [img.ravel() for img in images]  # reflatten images
-            images = np.array(images)
-
-            return images
-
-        images = get_images(studies)
-
-        def categorize(feature_table):
-            return [0 if row[0] > 0 else 1 for row in feature_table.as_matrix()]
-
-        categories = categorize(feature_table)
-        
-        from neurosynth.analysis.classify import classify
-
-        print(classify(images, categories))
-        print(classify(images, categories, clf_method='SVM'))
-        print(classify(images, categories, clf_method='Dummy'))
-
-
-        cca = cross_decomposition.CCA()
-        print(cca.fit(images, feature_table).score(images, feature_table))
-        binary_table = np.ceil(feature_table)
-        print(cca.fit(images, binary_table).score(images, binary_table))
-
-
     def write_csv(self, features=None):
-        """Creates distances.csv, a distance matrix of all MetaImages in self"""
-        df = self.to_dataframe()
-        if features is 'full':
-            raise NotImplementedError('not done yet')
-            full_features = df.dropna().index  # features with all distances computed
-            df = df[full_features].ix[full_features]  # index by cols and rows
-        elif features:
-            df = df[features].ix[features]  # index by cols and rows
+        """Creates distances.csv, a distance matrix of all MetaImages in self."""
+        df = self.to_dataframe(features)
         df.to_csv('distances.csv')
 
     def save(self):
-        """Saves self to file for future retrieval"""
+        """Saves self to cache/analyses/{self.name}.pkl for future retrieval."""
         LOG.debug('Attempting to save brain matrix')
         # delete extraneous information to keep files small
         save = copy.copy(self)
@@ -335,35 +297,21 @@ class BrainMatrix(dict):
         return MetaImage(key, self)
 
     def __str__(self):
-        me = self.__dict__
         return (
 '''BrainMatrix(image_type='{image_type}', downsample={downsample},
     downsample_method='{downsample_method}', blur={blur}, 
-    validation_trials={validation_trials})'''.format(**me))
-
-
-def lazy_property(fn):
-    """Decorator that makes a property lazy-evaluated"""
-    attr_name = '_lazy_' + fn.__name__
-
-    @property
-    def _lazy_property(self):
-        if not hasattr(self, attr_name):
-            setattr(self, attr_name, fn(self))
-        return getattr(self, attr_name)
-    return _lazy_property
+    validation_trials={validation_trials})'''.format(**self.__dict__))
 
 
 class MetaImage(dict):
-    """An fMRI metanalysis image with distances to other MetaImage objects
+    """An fMRI metanalysis image with distances to other MetaImage objects.
 
     Attributes:
         feature (str): The keyword which is used to find relevant studies in
           the neurosynth database.
+        bm (BrainMatrix): The parent BrainMatrix of this MetaImage
         img_file (str): The location of a .nii file. If none is given the file
           will be automatically downloaded from neurosynth.
-        studies (list): Studies in which self.feature appears more than .1%
-          of the time. Reported activations are used to generate images.
     """
     def __init__(self, feature, bm, img_file=None):
         LOG.debug('Calling MetaImage({})'.format(feature))
@@ -386,11 +334,11 @@ class MetaImage(dict):
 
     @lazy_property
     def studies(self):
-        """Returns a list of study ID numbers
+        """Returns a list of IDs for studies in which the keyword occurs frequently.
 
         This will raise an exception if the image wasn't pulled from Neurosynth"""
         ns_name = self.feature.replace('_', ' ')
-        return self.bm.data.get_ids_by_features(ns_name)
+        return self.bm.data.get_studies(features=ns_name)
 
     @lazy_property
     def image(self):
@@ -402,16 +350,30 @@ class MetaImage(dict):
         and the feature being tagged to a study in self.studies
         """
         if not os.path.isfile(self.img_file):
-            ma = MetaAnalysis(self.bm.data, self.studies)
-            # save to files
-            ma.save_results('data', self.feature, image_list=[self.bm.image_type])
+            # get the image from neurosynth
+            ma = MetaAnalysis(self.bm.data, self.studies)  # it's so easy!
+            ma.save_results('data/', self.feature, image_list=[self.bm.image_type])
+        
         # load the image
         image = nib.load(self.img_file)
-        array_image = np.array(image.dataobj)  # nibal uses array proxies
-        return array_image
+        image = np.array(image.dataobj)  # nibal uses array proxies
+
+        # Reduce resolution of image to make distance measure tractable.
+        # Future versions could use an anatomically informed downsampling
+        # instead of simply cubes. The reduced_image can have any
+        # dimensionality, thus it could be a  list of activations in
+        # each Broca's Area.
+        if self.bm.downsample_method == 'block_reduce':
+            reduced_image = block_reduce(image, self.bm.downsample, self.bm.blur)
+        elif self.bm.downsample_method == 'spline':
+            reduced_image = ndimage.interpolation.zoom(image, 1 / self.bm.downsample)
+        else:
+            raise ValueError('No downsample method: ' + self.bm.downsample_method)
+
+        return reduced_image
         
     @lazy_property
-    def cross_validation(self):  # TODO
+    def cross_validation(self):
         """Returns cross validation for feature.
 
         This is meant to be a measure of the variance of the image
@@ -420,6 +382,8 @@ class MetaImage(dict):
         between the two images generated from the studies. The mean
         and variance of these distances are returned.
         """
+        raise NotImplementedError('TOOD')
+
         LOG.warning('Calling {}.cross_validation()'.format(self))
         start = time.time()
         image_pairs = []
@@ -438,12 +402,9 @@ class MetaImage(dict):
 
             image_pairs.append((image1, image2))
 
-        if MULTI:
-            pool = mp.Pool(initializer=_init_worker)
-            argss = [(pair[0], pair[1], self.bm.downsample,
-                      self.bm.downsample_method, self.bm.blur)
-                     for pair in image_pairs]
-            out = [pool.apply_async(earth_movers_distance, args) for args in argss]
+        if self.multi:
+            pool = mp.Pool()
+            out = [pool.apply_async(earth_movers_distance, pair) for pair in image_pairs]
             for p in out:
                 while not p.ready():
                     # check periodically for keyboard interrupt
@@ -480,9 +441,9 @@ class Distance(dict):
 
     Attributes:
       bm (BrainMatrix): the parent BrainMatrix for self
-      TODO
       image1 (MetaImage): distances are between this object and self.image2
       image2 (MetaImage): distances are between this object and self.image1
+      distance (float): the value for the distance
       """
     def __init__(self, bm, image1, image2):
         super(Distance, self).__init__()
@@ -491,12 +452,10 @@ class Distance(dict):
         self.image2 = image2
         image1[image2.feature] = self  # distances are symmetric
         image2[image1.feature] = self
-
-    def __missing__(self, metric):
-        if self.image1 is self.image2:
-            return 0  # dist to self is 0 for all metrics (I hope!)
+        if image1 is image2:
+            self.distance = 0.0
         else:
-            return None
+            self.distance = None  # computed later
 
     @property
     def studies_jaccard_distance(self):
@@ -511,7 +470,7 @@ class Distance(dict):
         are repeatedly generated from halves of each feature image. The
         distance is computed between each image. The mean and variance
         of these distances are returned."""
-        assert False  # TODO
+        raise NotImplementedError('TOOD')
         LOG.warning("Calling ['{}']['{}'].cross_validation()".format(
                      self.image1, self.image2))
         start = time.time()
@@ -531,8 +490,8 @@ class Distance(dict):
             image_pairs.append((image1, image2))
 
         if MULTI:
-            pool = mp.Pool(initializer=_init_worker)
-            assert False  # metric! g
+            pool = mp.Pool()
+            assert False  # metric
             out = [pool.apply_async(metric, args=(pair[0], pair[1], self.bm.downsample,
                                                 self.bm.downsample_method, self.bm.blur))
                    for pair in image_pairs]
@@ -568,69 +527,23 @@ class Distance(dict):
         return self.__repr__
 
 
-###########
-# HELPERS #
-###########
-
 def load_brainmatrix(name):
     """Loads a cached BrainMatrix with same attribute values.
 
-    name must refer to a .pkl file in cache/analysis"""
+    name must refer to a .pkl file in cache/analysis, the
+    location that BrainMatrix.save() deposits to."""
     LOG.debug('Attempting to load brain matrix')
 
     if name.endswith('.pkl'):
         name = name[:-4]
 
     file = 'cache/analyses/{}.pkl'.format(name)
-    try:
-        old = joblib.load(file)
-    except IOError:
-        # no cached BrainMatrix
-        pass
-    else:
-        LOG.info('BrainMatrix loaded from file: {}'.format(file))
-        return old
-
-def earth_movers_distance(image1, image2, downsample, downsample_method, blur):
-    """Returns Earth Mover's Distance for image1 and image2"""
-    if downsample:
-        # reduce resolution of image to make problem tractable
-        if downsample_method == 'block_reduce':
-            image1 = _block_reduce(image1, downsample, blur)
-            image2 = _block_reduce(image2, downsample, blur)
-        elif downsample_method == 'spline':
-            image1 = ndimage.interpolation.zoom(image1, 1./downsample)
-            image2 = ndimage.interpolation.zoom(image2, 1./downsample)
-        else:
-            raise ValueError('No downsample method: ' + downsample_method)
-
-    # turn voxels into probability distributions
-    image1, image2 = [np.clip(img, 0, 999) for img in (image1, image2)]
-    image1, image2 = [img / np.sum(img) for img in (image1, image2)]
-
-    result = pyemd.emd(image1.ravel(), image2.ravel(), _distance_matrix(image1.shape))
-    return result
+    old = joblib.load(file)
+    LOG.info('BrainMatrix loaded from file: {}'.format(file))
+    return old
 
 
-def peak_distance(image1, image2):
-    """Returns Euclidean distance between the peaks of each image."""
-    assert False
-
-    def peak(img):
-        """Returns coordinates of voxel with highest activation in img"""
-        flat_img = np.array(img).flatten()
-        inds = np.argpartition(flat_img, -100)[-100:]
-        inds = [ind for ind in inds if flat_img[ind] == np.max(flat_img[inds])]
-        coords = np.array(np.unravel_index(inds, img.shape)).T
-        assert len(coords) == 1  # there is a unique peak
-        return coords[0]
-
-    # we reduce the images so that the peak and edm distances have same input
-    peaks = np.array([peak(img) for img in images])
-    return spatial.distance.pdist(peaks)[0]
-
-
-def _block_reduce(image, factor, blur):
+def block_reduce(image, factor, blur):
     """Returns a reduced resolution copy of given 3d image
 
     First, a gaussian blur is applied. Then the image is broken into
@@ -642,22 +555,10 @@ def _block_reduce(image, factor, blur):
     else:
         reshaped = False
     image = ndimage.filters.gaussian_filter(image, blur)
-    reduced = block_reduce(image, block_size=(factor, factor, factor), func=np.mean)
+    reduced = skimage.measure.block_reduce(image, block_size=(factor, factor, factor), func=np.mean)
     if reshaped:
         reduced = reduced.flatten  # return with same format as input
     return reduced
-
-
-# set up caching
-os.makedirs('cache', exist_ok=True)
-MEMORY = joblib.Memory(cachedir='cache', verbose=0)
-
-@MEMORY.cache
-def _distance_matrix(shape):
-    """Returns a distance matrix for all points in a space with given shape"""
-    m = np.mgrid[:shape[0], :shape[1], :shape[2]]
-    coords = np.array([m[0].ravel(), m[1].ravel(), m[2].ravel()]).T
-    return spatial.distance.squareform(spatial.distance.pdist(coords))
 
 
 def _getdata():
@@ -676,13 +577,6 @@ def _getdata():
     return data
 
 
-def _init_worker():
-    signal.signal(signal.SIGINT, signal.SIG_IGN)  # ignore keyboard interrupt
-
-def _unique_name():
-    import date
-    name = 'analysis'
-
 #################
 # CUSTOM SCRIPT #
 #################
@@ -699,14 +593,26 @@ def permutations(parameters):
 
     parmeters must be a list of (str, list) tuples, where str is
     the key and list, a list of values. A list of dictionaries
-    is returned."""
+    is returned. This is useful for generating arguments for the
+    BrainMatrxix initializer. For example the following blocks are
+    equivalent:
+
+    matrices = [BrainMatrix(image='pFgA', downsample=5),
+                BrainMatrix(image='pFgA', downsample=10),
+                BrainMatrix(image='pAgF', downsample=5),
+                BrainMatrix(image='pAgF', downsample=10)]
+
+    matrices = [BrainMatrix(**kwargs) 
+                for kwargs in permutations([('image', ['pFgA', 'pAgF']),
+                                            ('downsample', [5, 10])])]
+    """
 
     def recurse(parameters, permutations):
         if not parameters:
             return permutations
 
-        # return a copy of permutations with all possible values
-        #   for param added to each permutation
+        # Returns a copy of permutations with all possible values
+        # for param added to each permutation.
         # this multiplies len(permutations) by len(values)
         param, values = parameters.pop(0)
         new_perms = []
@@ -726,11 +632,12 @@ def permutations(parameters):
 
 def custom_script():
     """A custom script to be run on execution"""
-    bm = BrainMatrix(downsample=30, load=False)
+    bm = BrainMatrix(downsample=30, load=False, name='test1')
     features = ['syntactic', 'sequential', 'navigation', 'auditory', 'visual']
     bm.compute_distances(features, 'emd')
     bm.plot()
     bm.plot_dendrogram()
+
 
 def main(args):
     if 'interact' in args:
