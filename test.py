@@ -5,7 +5,7 @@ from utils import Timer
 if __name__ == '__main__':
     print('\n\nRUNNING TESTS\n----------------------------')
     with Timer('TESTS PASSED'):
-        # euclidaen_emd is a function of type (img * img) -> float
+        # euclidaen_emd 
         matrix = BrainMatrix(euclidean_emd, downsample=30, name='test')
         matrix.compute_distances(['syntactic', 'speech', 'semantic', 'music'])
         del matrix

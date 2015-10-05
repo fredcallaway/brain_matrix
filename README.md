@@ -8,18 +8,20 @@ Using `BrainMatrix` is fairly straightforward. An example is the best explanatio
 
 ```python
 from brain_matrix import BrainMatrix
+from distance import euclidean_emd
 
-# use a very high downsampling rate to speed up the example
-matrix = BrainMatrix(downsample=30)
-# compute a 3 X 3 matrix with 3 unique non-zero distances
-matrix.compute_distances(['syntactic', 'semantic', 'speech'], 'emd')
-print(matrix['semantic']['speech']['emd'])
-# create a clustered MDS plot in figs/
-matrix.plot(clusters=2, dim=2)
-# and a dendrogram
-matrix.plot_dendrogram()
-# write the matrix to a csv
-matrix.write_csv()
+if __name__ == '__main__':
+    # euclidaen_emd takes two arrays and return the Earth Movers
+    # Distance using a Euclidean distance matrix.
+    # We use an excessively large downsample value for demonstration
+    matrix = BrainMatrix(euclidean_emd, downsample=30, name='example')
+    matrix.compute_distances(['syntactic', 'speech', 'semantic', 'music'])
+    print(matrix['semantic']['speech'].distance)
+    # distance matrix in csv form
+    matrix.write_csv()
+    # create some figure in figs/
+    matrix.plot_dendrogram()
+    matrix.plot(clusters=2, dim=3, interactive=True)
 ```
 
 ## How does this work and why should I care?
