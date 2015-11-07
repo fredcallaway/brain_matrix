@@ -13,30 +13,26 @@ import logging
 import multiprocessing as mp
 import os
 import random
-import signal
 import sys
 import time
 
 import IPython
 import joblib
-from matplotlib import pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D  # is used implicitly
-from mpl_toolkits.mplot3d import proj3d
+
 import nibabel as nib
 import numpy as np
 import pandas as pd
-from scipy import stats, cluster, ndimage
+from scipy import stats, ndimage
 import skimage.measure
-from sklearn import cluster as skcluster, manifold
 
 from neurosynth.base.dataset import Dataset
 from neurosynth.analysis.meta import MetaAnalysis
 
 from distance import euclidean_emd
+import plotting
 from utils import lazy_property
 
 
-labels_and_points = []  # a hack to get around namespace problems
 
 # WARNING indicates beginning of computationally expensive processes
 # INFO indicates results and run time of computations
@@ -101,22 +97,20 @@ class BrainMatrix(dict):
             self.metric = euclidean_emd
         elif callable(metric):
             self.metric = metric
-
-        if blur:
-            self.blur = blur
         else:
-            self.blur = round(2 * downsample / 6)
+            raise ValueError('{metric} is not a valid metric'.format(**locals()))
 
-        if name:
-            self.name = name
-        else:
-            self.name = time.strftime('analysis_from_%m-%d_%H-%M-%S')
+        self.blur = blur if blur is not None else round(2 * downsample / 6)
+        self.name = name if name else time.strftime('analysis_from_%m-%d_%H-%M-%S')
 
         try:
             self.data = Dataset.load('data/dataset.pkl')
         except FileNotFoundError:
             self.data = _getdata()
 
+    def __missing__(self, key):
+        # constructor will raise an error if key is not a valid feature
+        return MetaImage(key, self)
 
     @property
     def features(self):
@@ -186,7 +180,7 @@ class BrainMatrix(dict):
         if self.auto_save:
             self.save()
 
-    def plot(self, features=None, interactive=False, dim=2, clustering=True, clusters=4):
+    def plot_mds(self, features=None, interactive=False, dim=2, clustering=True, clusters=4):
         """Saves a scatterplot of the features projected onto 2 dimensions.
 
         Uses MDS to project features onto a 2 or 3 dimensional based on their
@@ -196,60 +190,8 @@ class BrainMatrix(dict):
         rotating the graph.
         """
         df = self.to_dataframe(features)
-        if features:
-            df = df[features].ix[features]
-        else:
-            features = df.index
-            
-
-        if clustering:
-            clustering = skcluster.AgglomerativeClustering(
-                            linkage='complete', affinity='precomputed', n_clusters=clusters)
-            assignments = clustering.fit_predict(df)
-        
-        if dim == 2:
-            mds = manifold.MDS(n_components=2, eps=1e-9, dissimilarity="precomputed")
-            points = mds.fit(df).embedding_
-
-            plt.scatter(points[:,0], points[:,1], c=assignments, s=40)
-            for label, x, y in zip(features, points[:, 0], points[:, 1]):
-                plt.annotate(label, xy = (x, y), xytext = (-5, 5),
-                             textcoords = 'offset points', ha = 'right', va = 'bottom')
-        else:
-            if dim is not 3:
-                raise ValueError('dim must be 2 or 3. {} provided'.format(dim))
-            mds = manifold.MDS(n_components=3, eps=1e-9, dissimilarity="precomputed")
-            points = mds.fit(df).embedding_
-
-            fig = plt.figure()
-            ax = fig.add_subplot(111, projection = '3d')
-            xs, ys, zs = np.split(points, 3, axis=1)
-            ax.scatter(xs,ys,zs, c=assignments, s=40)
-
-            # make labels move as the user rotates the graph
-            global labels_and_points  # a hack for namespace problems
-            labels_and_points = []
-            for feature, x, y, z in zip(features, xs, ys, zs):
-                x2, y2, _ = proj3d.proj_transform(x,y,z, ax.get_proj())
-                label = plt.annotate(
-                    feature, 
-                    xy = (x2, y2), xytext = (-5, 5),
-                    textcoords = 'offset points', ha = 'right', va = 'bottom',)
-                labels_and_points.append((label, x, y, z))
-
-            def update_position(e):
-                for label, x, y, z in labels_and_points:
-                    x2, y2, _ = proj3d.proj_transform(x, y, z, ax.get_proj())
-                    label.xy = x2,y2
-                    label.update_positions(fig.canvas.renderer)
-                fig.canvas.draw()
-
-            fig.canvas.mpl_connect('motion_notify_event', update_position)
-
-        os.makedirs('figs', exist_ok=True)
-        plt.savefig('figs/{}_mds{}.png'.format(self.name, dim))
-        if interactive:
-            plt.show()
+        plotting.mds(df, name=self.name, interactive=interactive, dim=dim,
+                     clustering=clustering, clusters=clusters)
 
     def plot_dendrogram(self, features=None, method='complete'):
         """Plots a dendrogram using hierarchical clustering.
@@ -258,16 +200,8 @@ class BrainMatrix(dict):
         possible clustering methods.
         """
         df = self.to_dataframe(features)
-        clustering = cluster.hierarchy.linkage(df, method=method)
-        cluster.hierarchy.dendrogram(clustering, orientation='left', truncate_mode=None,
-                                     labels=features, color_threshold=0)
-        LOG.critical('DENDROGRAM INCONSISTENCY: {}'
-                     .format(cluster.hierarchy.inconsistent(clustering)))
-        plt.tight_layout()
-
-        os.makedirs('figs', exist_ok=True)
-        plt.savefig('figs/{}_dendrogram.png'.format(self.name))
-
+        inconsistency = plotting.dendrogram(df, name=self.name, method=method)
+        LOG.critical('DENDROGRAM INCONSISTENCY: {}'.format(inconsistency))
 
     def write_csv(self, features=None):
         """Creates distances.csv, a distance matrix of all MetaImages in self."""
@@ -291,10 +225,6 @@ class BrainMatrix(dict):
         file = ('cache/analyses/{}.pkl').format(self.name)
         joblib.dump(save, file, compress=3)
         LOG.info('BrainMatrix saved to {}'.format(file))
-
-    def __missing__(self, key):
-        # constructor will raise an error if key is not a valid feature
-        return MetaImage(key, self)
 
     def __str__(self):
         return (
@@ -361,14 +291,14 @@ class MetaImage(dict):
         # Reduce resolution of image to make distance measure tractable.
         # Future versions could use an anatomically informed downsampling
         # instead of simply cubes. The reduced_image can have any
-        # dimensionality, thus it could be a  list of activations in
+        # dimensionality, thus it could be a list of activations in
         # each Broca's Area.
         if self.bm.downsample_method == 'block_reduce':
             reduced_image = block_reduce(image, self.bm.downsample, self.bm.blur)
         elif self.bm.downsample_method == 'spline':
             reduced_image = ndimage.interpolation.zoom(image, 1 / self.bm.downsample)
         else:
-            raise ValueError('No downsample method: ' + self.bm.downsample_method)
+            raise ValueError('No downsample method: {}'.format(self.bm.downsample_method))
 
         return reduced_image
         
@@ -387,8 +317,8 @@ class MetaImage(dict):
         LOG.warning('Calling {}.cross_validation()'.format(self))
         start = time.time()
         image_pairs = []
+        studies = self.studies[:]  # copy the list
         for n in range(self.bm.validation_trials):
-            studies = self.studies[:]  # copy the list
             random.shuffle(studies)
 
             studies1 = studies[:len(studies) // 2]
@@ -632,11 +562,14 @@ def permutations(parameters):
 
 def custom_script():
     """A custom script to be run on execution"""
-    bm = BrainMatrix(downsample=30, load=False, name='test1')
-    features = ['syntactic', 'sequential', 'navigation', 'auditory', 'visual']
-    bm.compute_distances(features, 'emd')
-    bm.plot()
-    bm.plot_dendrogram()
+    start = time.time()
+    bm = BrainMatrix(downsample=10, name='test1', auto_save=False)
+    features = ['syntactic', 'sequential', 'navigation', 'auditory', 'visual', 'depression']
+    bm.compute_distances(features)
+    print('TIME: {}'.format(time.time() - start))
+
+    #bm.plot()
+    #bm.plot_dendrogram()
 
 
 def main(args):
