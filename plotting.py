@@ -1,6 +1,7 @@
 from matplotlib import pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D  # used implicitly
 from mpl_toolkits.mplot3d import proj3d
+import numpy as np
 import os
 
 from sklearn import cluster as skcluster, manifold

@@ -1,8 +1,9 @@
-import pyemd
-from scipy import spatial
+import joblib
 import numpy as np
 import os
-import joblib
+import pyemd
+from scipy import spatial, ndimage
+import skimage.measure
 
 os.makedirs('cache', exist_ok=True)
 MEMORY = joblib.Memory(cachedir='cache', verbose=0)
@@ -39,3 +40,16 @@ def euclidean_emd(image1, image2):
     """Earth Movers Distance with a Euclidean distance matrix."""
     distance_matrix = euclidean_distance_matrix(image1.shape)
     return earth_movers_distance(distance_matrix, image1, image2)
+
+
+def block_reduce(image, factor=8, blur=None):
+    """Returns a reduced resolution copy of given 3d image
+
+    First, a gaussian blur is applied. Then the image is broken into
+    cubes with side length of factor. The returned image is made up
+    of the means of each block."""
+    blur = round(2 * factor / 6)
+    image = ndimage.filters.gaussian_filter(image, blur)
+    reduced = skimage.measure.block_reduce(
+                image, block_size=(factor, factor, factor), func=np.mean)
+    return reduced

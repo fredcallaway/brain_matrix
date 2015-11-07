@@ -12,23 +12,19 @@ import inspect
 import logging
 import multiprocessing as mp
 import os
-import random
 import sys
 import time
 
-import IPython
 import joblib
 
 import nibabel as nib
 import numpy as np
 import pandas as pd
-from scipy import stats, ndimage
-import skimage.measure
 
 from neurosynth.base.dataset import Dataset
 from neurosynth.analysis.meta import MetaAnalysis
 
-from distance import euclidean_emd
+from distance import euclidean_emd, block_reduce
 import plotting
 from utils import lazy_property
 
@@ -72,7 +68,7 @@ class BrainMatrix(dict):
         in the image.
       downsample (float/int): the factor by which images are downsampled before
         distances are measured.
-      downsample_method (str): method of downsampling.
+      image_transform (str): method of downsampling.
         Can be 'block_reduce' or 'spline'
       blur (float/int): the sigma value for the gaussian filter applied to
         images before downsample when using block_reduce
@@ -83,34 +79,38 @@ class BrainMatrix(dict):
         be loaded with load_brainmatrix(name)
 
     """
-    def __init__(self, metric='emd', image_type='pAgF', validation_trials=16,
-                 downsample=8, downsample_method='block_reduce', blur=None,
-                 auto_save=True, multi=True, name=None):
+    def __init__(self, metric='emd', image_type='pAgF', name=None, multi=True,
+                 image_transform='block_reduce', downsample=8, auto_save=True):
         self.image_type = image_type
-        self.downsample = downsample
-        self.downsample_method = downsample_method
-        self.validation_trials = validation_trials
-        self.auto_save = auto_save
         self.multi = multi
+        self.downsample = downsample
+        self.auto_save = auto_save
 
-        if metric == 'emd':
-            self.metric = euclidean_emd
-        elif callable(metric):
+        if callable(metric):
             self.metric = metric
+        elif metric == 'emd':
+            self.metric = euclidean_emd
         else:
             raise ValueError('{metric} is not a valid metric'.format(**locals()))
 
-        self.blur = blur if blur is not None else round(2 * downsample / 6)
+        if callable(image_transform):
+            self.image_transform = image_transform
+        elif image_transform == 'block_reduce':
+            from functools import partial
+            self.image_transform = partial(block_reduce, factor=downsample)
+            #def block_reduce_transform(image):
+                #"""The default transformation."""
+                #return block_reduce(image, downsample, blur)
+            #self.image_transform = block_reduce_transform
+        else:
+            raise ValueError(('{image_transform} is not a valid'
+                              'transform function').format(**locals()))
         self.name = name if name else time.strftime('analysis_from_%m-%d_%H-%M-%S')
 
         try:
             self.data = Dataset.load('data/dataset.pkl')
         except FileNotFoundError:
             self.data = _getdata()
-
-    def __missing__(self, key):
-        # constructor will raise an error if key is not a valid feature
-        return MetaImage(key, self)
 
     @property
     def features(self):
@@ -140,7 +140,6 @@ class BrainMatrix(dict):
         with size equal to the number of cpu cores on the machine. Distances
         will be logged as they are computed.
         """        
-        # TODO: make sure nibabel proxy arrays aren't slowing things down
         dists_to_compute = []
         for i, f1 in enumerate(features):
             for f2 in features[i+1:]:
@@ -226,11 +225,15 @@ class BrainMatrix(dict):
         joblib.dump(save, file, compress=3)
         LOG.info('BrainMatrix saved to {}'.format(file))
 
+
+    def __missing__(self, key):
+        # constructor will raise an error if key is not a valid feature
+        return MetaImage(key, self)
+
     def __str__(self):
-        return (
-'''BrainMatrix(image_type='{image_type}', downsample={downsample},
-    downsample_method='{downsample_method}', blur={blur}, 
-    validation_trials={validation_trials})'''.format(**self.__dict__))
+        return ('BrainMatrix(image_type={image_type}, metric={metric},\n'
+                '            image_transform={image_transform}, downsample={downsample},\n'
+                '            name={name})').format(**self.__dict__)
 
 
 class MetaImage(dict):
@@ -238,7 +241,7 @@ class MetaImage(dict):
 
     Attributes:
         feature (str): The keyword which is used to find relevant studies in
-          the neurosynth database.
+          the neurosynth database. Also a unique identifier of the MetaImage.
         bm (BrainMatrix): The parent BrainMatrix of this MetaImage
         img_file (str): The location of a .nii file. If none is given the file
           will be automatically downloaded from neurosynth.
@@ -266,7 +269,7 @@ class MetaImage(dict):
     def studies(self):
         """Returns a list of IDs for studies in which the keyword occurs frequently.
 
-        This will raise an exception if the image wasn't pulled from Neurosynth"""
+        This will raise an exception if the image wasn't pulled from Neurosynthself."""
         ns_name = self.feature.replace('_', ' ')
         return self.bm.data.get_studies(features=ns_name)
 
@@ -278,84 +281,76 @@ class MetaImage(dict):
         Neurosynth documentation for details. In short, the values in the
         image are probabilities associated with activation of each voxel
         and the feature being tagged to a study in self.studies
+
+        The image is preprocessed using `self.bm.image_transform`, a function
+        that maps the full fMRI image into a lower dimensional form. This reduction
+        is necessary for Earth Mover's Distance to be tractable.
         """
         if not os.path.isfile(self.img_file):
             # get the image from neurosynth
-            ma = MetaAnalysis(self.bm.data, self.studies)  # it's so easy!
+            ma = MetaAnalysis(self.bm.data, self.studies)  # Neurosynth is so easy!
             ma.save_results('data/', self.feature, image_list=[self.bm.image_type])
         
         # load the image
         image = nib.load(self.img_file)
         image = np.array(image.dataobj)  # nibal uses array proxies
 
-        # Reduce resolution of image to make distance measure tractable.
-        # Future versions could use an anatomically informed downsampling
-        # instead of simply cubes. The reduced_image can have any
-        # dimensionality, thus it could be a list of activations in
-        # each Broca's Area.
-        if self.bm.downsample_method == 'block_reduce':
-            reduced_image = block_reduce(image, self.bm.downsample, self.bm.blur)
-        elif self.bm.downsample_method == 'spline':
-            reduced_image = ndimage.interpolation.zoom(image, 1 / self.bm.downsample)
-        else:
-            raise ValueError('No downsample method: {}'.format(self.bm.downsample_method))
-
-        return reduced_image
+        return self.bm.image_transform(image)
         
-    @lazy_property
-    def cross_validation(self):
-        """Returns cross validation for feature.
+    #@lazy_property
+    #def cross_validation(self):
+    #    """Returns cross validation for feature.
 
-        This is meant to be a measure of the variance of the image
-        associated with self. Cross validation is done by repeatedly
-        splitting self.studies in half and computing the distance
-        between the two images generated from the studies. The mean
-        and variance of these distances are returned.
-        """
-        raise NotImplementedError('TOOD')
+    #    This is meant to be a measure of the variance of the image
+    #    associated with self. Cross validation is done by repeatedly
+    #    splitting self.studies in half and computing the distance
+    #    between the two images generated from the studies. The mean
+    #    and variance of these distances are returned.
+    #    """
+    #    raise NotImplementedError('TOOD')
 
-        LOG.warning('Calling {}.cross_validation()'.format(self))
-        start = time.time()
-        image_pairs = []
-        studies = self.studies[:]  # copy the list
-        for n in range(self.bm.validation_trials):
-            random.shuffle(studies)
+    #    LOG.warning('Calling {}.cross_validation()'.format(self))
+    #    start = time.time()
+    #    image_pairs = []
+    #    studies = self.studies[:]  # copy the list
+    #    for n in range(self.bm.validation_trials):
+    #        random.shuffle(studies)
 
-            studies1 = studies[:len(studies) // 2]
-            studies2 = studies[len(studies) // 2:]
-            ma1 = MetaAnalysis(self.bm.data, ids=studies1)
-            ma2 = MetaAnalysis(self.bm.data, ids=studies2)
+    #        studies1 = studies[:len(studies) // 2]
+    #        studies2 = studies[len(studies) // 2:]
+    #        ma1 = MetaAnalysis(self.bm.data, ids=studies1)
+    #        ma2 = MetaAnalysis(self.bm.data, ids=studies2)
 
-            # remove the mask to get a full cube image
-            image1 = self.bm.data.masker.unmask(ma1.images[self.bm.image_type])
-            image2 = self.bm.data.masker.unmask(ma2.images[self.bm.image_type])
+    #        # remove the mask to get a full cube image
+    #        image1 = self.bm.data.masker.unmask(ma1.images[self.bm.image_type])
+    #        image2 = self.bm.data.masker.unmask(ma2.images[self.bm.image_type])
 
-            image_pairs.append((image1, image2))
+    #        image_pairs.append((image1, image2))
 
-        if self.multi:
-            pool = mp.Pool()
-            out = [pool.apply_async(earth_movers_distance, pair) for pair in image_pairs]
-            for p in out:
-                while not p.ready():
-                    # check periodically for keyboard interrupt
-                    try:
-                        time.sleep(10)
-                    except KeyboardInterrupt:
-                        # ask for user input
-                        pool.terminate()
-                        pool.join()
-                        raise KeyboardInterrupt()
+    #    if self.multi:
+    #        pool = mp.Pool()
+    #        out = [pool.apply_async(earth_movers_distance, pair) for pair in image_pairs]
+    #        for p in out:
+    #            while not p.ready():
+    #                # check periodically for keyboard interrupt
+    #                try:
+    #                    time.sleep(10)
+    #                except KeyboardInterrupt:
+    #                    # ask for user input
+    #                    pool.terminate()
+    #                    pool.join()
+    #                    raise KeyboardInterrupt()
 
-            distances = [p.get() for p in out]
-            pool.close()
-        else:
-            distances = [earth_movers_distance(pair[0], pair[1], self.bm.downsample, 
-                              self.bm.downsample_method, self.bm.blur)
-                         for pair in image_pairs]
+    #        distances = [p.get() for p in out]
+    #        pool.close()
+    #    else:
+    #        distances = [earth_movers_distance(pair[0], pair[1], self.bm.downsample, 
+    #                          self.bm.image_transform, self.bm.blur)
+    #                     for pair in image_pairs]
 
-        result = tuple(stats.describe(distances)[2:4])
-        LOG.info('Returned {} in {:.0f} seconds'.format(result, time.time() - start))
-        return result
+    #    result = tuple(stats.describe(distances)[2:4])
+    #    LOG.info('Returned {} in {:.0f} seconds'.format(result, time.time() - start))
+    #    return result
 
     def __missing__(self, key):
         return Distance(self.bm, self, self.bm[key])
@@ -365,6 +360,7 @@ class MetaImage(dict):
 
     def __str__(self):
         return self.__repr__()
+
 
 class Distance(dict):
     """Distance between two MetaImages. Keys indicate different metrics.
@@ -393,58 +389,58 @@ class Distance(dict):
         s2 = set(self.image2.studies)
         return len(s1 & s2) / len(s1 | s2) 
 
-    def cross_validation(self, metric):
-        """Returns cross validation for self
+    #def cross_validation(self, metric):
+    #    """Returns cross validation for self
 
-        Cross validation method is similar to that of MetaImage. Two images
-        are repeatedly generated from halves of each feature image. The
-        distance is computed between each image. The mean and variance
-        of these distances are returned."""
-        raise NotImplementedError('TOOD')
-        LOG.warning("Calling ['{}']['{}'].cross_validation()".format(
-                     self.image1, self.image2))
-        start = time.time()
-        image_pairs = []
-        for _ in range(self.bm.validation_trials):
-            studies1 = self.image1.studies[:]  # copy the list
-            studies2 = self.image2.studies[:]  # copy the list
-            random.shuffle(studies1)
-            random.shuffle(studies2)
-            studies1 = studies1[:len(studies1) // 2]
-            studies2 = studies2[:len(studies2) // 2]
-            ma1 = MetaAnalysis(self.bm.data, ids=studies1)
-            ma2 = MetaAnalysis(self.bm.data, ids=studies2)
-            # remove the mask to get a full cube image
-            image1 = self.bm.data.masker.unmask(ma1.images[self.bm.image_type])
-            image2 = self.bm.data.masker.unmask(ma2.images[self.bm.image_type])
-            image_pairs.append((image1, image2))
+    #    Cross validation method is similar to that of MetaImage. Two images
+    #    are repeatedly generated from halves of each feature image. The
+    #    distance is computed between each image. The mean and variance
+    #    of these distances are returned."""
+    #    raise NotImplementedError('TOOD')
+    #    LOG.warning("Calling ['{}']['{}'].cross_validation()".format(
+    #                 self.image1, self.image2))
+    #    start = time.time()
+    #    image_pairs = []
+    #    for _ in range(self.bm.validation_trials):
+    #        studies1 = self.image1.studies[:]  # copy the list
+    #        studies2 = self.image2.studies[:]  # copy the list
+    #        random.shuffle(studies1)
+    #        random.shuffle(studies2)
+    #        studies1 = studies1[:len(studies1) // 2]
+    #        studies2 = studies2[:len(studies2) // 2]
+    #        ma1 = MetaAnalysis(self.bm.data, ids=studies1)
+    #        ma2 = MetaAnalysis(self.bm.data, ids=studies2)
+    #        # remove the mask to get a full cube image
+    #        image1 = self.bm.data.masker.unmask(ma1.images[self.bm.image_type])
+    #        image2 = self.bm.data.masker.unmask(ma2.images[self.bm.image_type])
+    #        image_pairs.append((image1, image2))
 
-        if MULTI:
-            pool = mp.Pool()
-            assert False  # metric
-            out = [pool.apply_async(metric, args=(pair[0], pair[1], self.bm.downsample,
-                                                self.bm.downsample_method, self.bm.blur))
-                   for pair in image_pairs]
-            for p in out:
-                while not p.ready():
-                    # check periodically for keyboard interrupt
-                    try:
-                        time.sleep(10)
-                    except KeyboardInterrupt:
-                        pool.terminate()
-                        pool.join()
-                        raise KeyboardInterrupt()
+    #    if MULTI:
+    #        pool = mp.Pool()
+    #        assert False  # metric
+    #        out = [pool.apply_async(metric, args=(pair[0], pair[1], self.bm.downsample,
+    #                                            self.bm.image_transform, self.bm.blur))
+    #               for pair in image_pairs]
+    #        for p in out:
+    #            while not p.ready():
+    #                # check periodically for keyboard interrupt
+    #                try:
+    #                    time.sleep(10)
+    #                except KeyboardInterrupt:
+    #                    pool.terminate()
+    #                    pool.join()
+    #                    raise KeyboardInterrupt()
 
-            distances = [p.get() for p in out]
-            pool.close()
-        else:
-            distances = [earth_movers_distance(pair[0], pair[1], self.bm.downsample,
-                              self.bm.downsample_method, self.bm.blur)
-                         for pair in image_pairs]
+    #        distances = [p.get() for p in out]
+    #        pool.close()
+    #    else:
+    #        distances = [earth_movers_distance(pair[0], pair[1], self.bm.downsample,
+    #                          self.bm.image_transform, self.bm.blur)
+    #                     for pair in image_pairs]
 
-        result = tuple(stats.describe(distances)[2:4])
-        LOG.info('Returned {} in {} seconds'.format(result, time.time() - start))
-        return result
+    #    result = tuple(stats.describe(distances)[2:4])
+    #    LOG.info('Returned {} in {} seconds'.format(result, time.time() - start))
+    #    return result
 
     def __repr__(self):
         f1, f2 = self.image1.feature, self.image2.feature
@@ -471,24 +467,6 @@ def load_brainmatrix(name):
     old = joblib.load(file)
     LOG.info('BrainMatrix loaded from file: {}'.format(file))
     return old
-
-
-def block_reduce(image, factor, blur):
-    """Returns a reduced resolution copy of given 3d image
-
-    First, a gaussian blur is applied. Then the image is broken into
-    cubes with side length of factor. The returned image is made up
-    of the means of each block."""
-    if len(image.shape) == 1:  # flattened image
-        image = image.reshape(91, 109, 91)  # shape of MNI space
-        reshaped = True
-    else:
-        reshaped = False
-    image = ndimage.filters.gaussian_filter(image, blur)
-    reduced = skimage.measure.block_reduce(image, block_size=(factor, factor, factor), func=np.mean)
-    if reshaped:
-        reduced = reduced.flatten  # return with same format as input
-    return reduced
 
 
 def _getdata():
@@ -560,7 +538,7 @@ def permutations(parameters):
     return recurse(parameters, permutations)
 
 
-def custom_script():
+def custom_script(*args):
     """A custom script to be run on execution"""
     start = time.time()
     bm = BrainMatrix(downsample=10, name='test1', auto_save=False)
@@ -573,29 +551,25 @@ def custom_script():
 
 
 def main(args):
-    if 'interact' in args:
-        IPython.embed()  # interactive shell
-
-    else:
-        script_source = inspect.getsourcelines(custom_script)[0]
-        script_source = ''.join([line[4:] for line in script_source])  # unindent
-        log('\n\n------------------------------------')
-        log('DATE: ' + time.strftime('%m/%d at %H:%M'))
-        log('SCRIPT:\n' + script_source)
-        log('\nOUTPUT:')
-        start = time.time()
-        try:
-            result = custom_script()
-            print(result)
-        except:
-            LOG.exception('Exception in script:')
-            raise
-        finally:
-            runtime = time.time() - start
-            hours = int(runtime // 60 ** 2)
-            minutes = int((runtime % 60 ** 2) // 60)
-            seconds = int(runtime % 60)
-            log('\nRUN TIME: ' + '{}:{}:{}'.format(hours, minutes, seconds))
+    script_source = inspect.getsourcelines(custom_script)[0]
+    script_source = ''.join([line[4:] for line in script_source])  # unindent
+    log('\n\n------------------------------------')
+    log('DATE: ' + time.strftime('%m/%d at %H:%M'))
+    log('SCRIPT:\n' + script_source)
+    log('\nOUTPUT:')
+    start = time.time()
+    try:
+        result = custom_script(*args)
+        print(result)
+    except:
+        LOG.exception('Exception in script:')
+        raise
+    finally:
+        runtime = time.time() - start
+        hours = int(runtime // 60 ** 2)
+        minutes = int((runtime % 60 ** 2) // 60)
+        seconds = int(runtime % 60)
+        log('\nRUN TIME: ' + '{}:{}:{}'.format(hours, minutes, seconds))
 
 
 if __name__ == '__main__':
