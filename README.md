@@ -1,33 +1,30 @@
 # brain_matrix
 
 brain_matrix is a python package for distance metric oriented fMRI meta-analysis. The package provides one main class `BrainMatrix` which has fMRI images for rows and columns. The entries are distances between each images as defined by a given distance metric. By default, images are pulled from [Neurosynth](http://www.neurosynth.org) using keyword features like "semantic" or "anxiety". For a distance metric, we provide [Earth Movers Distance](
-https://en.wikipedia.org/wiki/Earth_mover%27s_distance), a metric that has been successfully used to compare 2D images. Currently, the code is set up in such a way that makes using ones own distance metrics or images difficult, but this will be fixed soon.
+https://en.wikipedia.org/wiki/Earth_mover%27s_distance), a metric that has been successfully used to compare 2D images. However, one can also provide their own distance metric function.
 
 ## Usage
 Using `BrainMatrix` is fairly straightforward. An example is the best explanation:
 
 ```python
 from brain_matrix import BrainMatrix
-from distance import euclidean_emd
 
 if __name__ == '__main__':
-    # euclidaen_emd takes two arrays and return the Earth Movers
-    # Distance using a Euclidean distance matrix.
     # We use an excessively large downsample value for demonstration
-    matrix = BrainMatrix(euclidean_emd, downsample=30, name='example')
+    matrix = BrainMatrix(downsample=30, name='example')
     matrix.compute_distances(['syntactic', 'speech', 'semantic', 'music'])
     print(matrix['semantic']['speech'].distance)
     # distance matrix in csv form
     matrix.write_csv()
     # create some figure in figs/
     matrix.plot_dendrogram()
-    matrix.plot(clusters=2, dim=3, interactive=True)
+    matrix.plot_mds(clusters=2, dim=3, interactive=True)
 ```
 
 ## How does this work and why should I care?
 Most generally, this package allows the user to explore the similarity structure of cognitive activities in terms of their neural underpinnings. Given a set of cognitive activities, brain_matrix provides a scalar difference between any two activities. To facilitate understanding, these activities can then be embedded into a low dimensional space by multidimensional scaling. brain_matrix requires two independent pieces to provide this functionality:
 
-1. A mapping from cognitive activities onto static three dimensional arrays (i.e. three dimensional images).
+1. A mapping from cognitive activities onto three dimensional arrays (i.e. three dimensional images).
 2. A distance metric over three dimensional arrays such that distances in the image space reflect functional differences between the associated tasks.
 
 fMRI images provide a clear option for (1). fMRI images are three dimensional arrays, where each element is a voxel, whose value reflects the activity level of the neurons in that location in the brain. If you have an fMRI scanner, you can create a mapping for any activity you can get a subject to do in the scanner. For the rest of us, brain_matrix provides an interface to Neurosynth, a meta-analysis platform. Neurosynth creates a meta-analytic fMRI image for a given keyword (e.g. "visual") by combining reported activations from papers in which the word ("visual") occurs frequently. Thus, we approximate a mapping from cognitive activities to brain activation with a mapping from words to activations reported in papers that contain those words.
@@ -46,3 +43,13 @@ Given (1) a mapping from keywords to brain images, and (2) a distance metric ove
 ### Multidimensional scaling
 ![mds](http://imgur.com/zfG13O7.png)
 
+## Process
+A rough description of the processing pipeline:
+
+- for each feature
+    - get a list of studies that Neurosynth has labeled with this feature
+    - get a composite fMRI image (using Neurosynth) for these studies
+    - transform this image into a lower dimensional form using the `image_transform` function. This is a block reduction by default, but the user could provide an alternative (perhaps anatomically justified) transformation function.
+- for each pair of features
+    - get the image associated with each feature
+    - compute the distance between the two features as defined by `metric`. By default, we use Earth Movers Distance. The user can provide her own function that two images in the form returned by `image_transform` (a three dimensional array by default).
