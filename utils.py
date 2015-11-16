@@ -5,12 +5,16 @@ class Timer(object):
         self.name = name
         self.print_func = print_func
 
+    @property
+    def elapsed(self):
+        return time.time() - self.start
+
     def __enter__(self):
         self.start = time.time()
-        
+        return self
+
     def __exit__(self,ty,val,tb):
-        end = time.time()
-        self.print_func("%s : %0.3f seconds" % (self.name, end-self.start))
+        self.print_func("%s : %0.3f seconds" % (self.name, self.elapsed))
         return False
 
 
@@ -24,3 +28,8 @@ def lazy_property(fn):
             setattr(self, attr_name, fn(self))
         return getattr(self, attr_name)
     return _lazy_property
+
+
+if __name__ == '__main__':
+    with Timer('foo') as t:
+        print(t.elapsed)
