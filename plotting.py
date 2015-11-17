@@ -70,6 +70,8 @@ def mds(df, name="", dim=2, clustering=True, clusters=4, interactive=False):
     if interactive:
         plt.show()
 
+    return mds.stress_
+
 
 def dendrogram(df, name="", method='complete'):
     """Plots a dendrogram using hierarchical clustering. Returns inconsistency.

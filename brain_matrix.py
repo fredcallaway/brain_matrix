@@ -46,9 +46,9 @@ filer.setFormatter(logging.Formatter(
                    datefmt='%X', fmt='[%(levelname)s]\t(%(asctime)s):\t%(message)s'))
 
 LOG.addHandler(filer)
-# LOG.addHandler(printer)
+LOG.addHandler(printer)
 del filer
-del printer
+#del printer
 
 
 class BrainMatrix(dict):
@@ -146,7 +146,6 @@ class BrainMatrix(dict):
                 distance_value = self[f1][f2].distance
                 if distance_value is None:
                     dists_to_compute.append(self[f1][f2])
-
         LOG.warning('Computing {} distances'.format(len(dists_to_compute)))
         img_pairs = [(d.image1.image, d.image2.image) for d in dists_to_compute]
 
@@ -164,7 +163,7 @@ class BrainMatrix(dict):
                 # This line blocks until the result is returned by the worker.
                 dist.distance = results[i].get()
 
-                f1, f1 = dist.image1.feature, dist.image2.feature
+                f1, f2 = dist.image1.feature, dist.image2.feature
                 elapsed = time.time() - start
                 LOG.info(('{f1} - {f2} [{self.metric}]: {dist.distance}' +
                           '\t({elapsed} seconds)').format(**locals()))
@@ -189,8 +188,9 @@ class BrainMatrix(dict):
         rotating the graph.
         """
         df = self.to_dataframe(features)
-        plotting.mds(df, name=self.name, interactive=interactive, dim=dim,
-                     clustering=clustering, clusters=clusters)
+        stress = plotting.mds(df, name=self.name, interactive=interactive, dim=dim,
+                              clustering=clustering, clusters=clusters)
+        return stress
 
     def plot_dendrogram(self, features=None, method='complete'):
         """Plots a dendrogram using hierarchical clustering.
@@ -200,7 +200,7 @@ class BrainMatrix(dict):
         """
         df = self.to_dataframe(features)
         inconsistency = plotting.dendrogram(df, name=self.name, method=method)
-        LOG.critical('DENDROGRAM INCONSISTENCY: {}'.format(inconsistency))
+        return inconsistency
 
     def write_csv(self, features=None):
         """Creates distances.csv, a distance matrix of all MetaImages in self."""
@@ -483,96 +483,3 @@ def _getdata():
     data.add_features('data/features.txt')
     data.save('data/dataset.pkl')
     return data
-
-
-#################
-# CUSTOM SCRIPT #
-#################
-
-
-def log(txt):
-    """Appends txt to log.txt"""
-    with open('log.txt', 'a+') as f:
-        f.write(str(txt)+'\n')
-
-
-def permutations(parameters):
-    """Returns all possible permutations of params in parameters
-
-    parmeters must be a list of (str, list) tuples, where str is
-    the key and list, a list of values. A list of dictionaries
-    is returned. This is useful for generating arguments for the
-    BrainMatrxix initializer. For example the following blocks are
-    equivalent:
-
-    matrices = [BrainMatrix(image='pFgA', downsample=5),
-                BrainMatrix(image='pFgA', downsample=10),
-                BrainMatrix(image='pAgF', downsample=5),
-                BrainMatrix(image='pAgF', downsample=10)]
-
-    matrices = [BrainMatrix(**kwargs) 
-                for kwargs in permutations([('image', ['pFgA', 'pAgF']),
-                                            ('downsample', [5, 10])])]
-    """
-
-    def recurse(parameters, permutations):
-        if not parameters:
-            return permutations
-
-        # Returns a copy of permutations with all possible values
-        # for param added to each permutation.
-        # this multiplies len(permutations) by len(values)
-        param, values = parameters.pop(0)
-        new_perms = []
-        for v in values:
-            perm_copy = copy.deepcopy(permutations)
-            for perm in perm_copy:
-                perm[param] = v
-            new_perms += perm_copy
-
-        return recurse(parameters, new_perms)
-
-    parameters.reverse()  # so that result is sorted by first parameter
-    param, values = parameters.pop(0)
-    permutations = [{param: val} for val in values]
-    return recurse(parameters, permutations)
-
-
-def custom_script(*args):
-    """A custom script to be run on execution"""
-    start = time.time()
-    bm = BrainMatrix(downsample=10, name='test1', auto_save=False)
-    features = ['syntactic', 'sequential', 'navigation', 'auditory', 'visual', 'depression']
-    bm.compute_distances(features)
-    print('TIME: {}'.format(time.time() - start))
-
-    #bm.plot()
-    #bm.plot_dendrogram()
-
-
-def main(args):
-    script_source = inspect.getsourcelines(custom_script)[0]
-    script_source = ''.join([line[4:] for line in script_source])  # unindent
-    log('\n\n------------------------------------')
-    log('DATE: ' + time.strftime('%m/%d at %H:%M'))
-    log('SCRIPT:\n' + script_source)
-    log('\nOUTPUT:')
-    start = time.time()
-    try:
-        result = custom_script(*args)
-        print(result)
-    except:
-        LOG.exception('Exception in script:')
-        raise
-    finally:
-        runtime = time.time() - start
-        hours = int(runtime // 60 ** 2)
-        minutes = int((runtime % 60 ** 2) // 60)
-        seconds = int(runtime % 60)
-        log('\nRUN TIME: ' + '{}:{}:{}'.format(hours, minutes, seconds))
-
-
-if __name__ == '__main__':
-    # import sys
-    main(sys.argv[1:])
-    #bm = BrainMatrix(downsample=6)
