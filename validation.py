@@ -27,13 +27,13 @@ if __name__ == '__main__':
     data = []
     with open('times.txt', 'w+') as log:
         for fold_id, fold in enumerate(folds):
-            for ds in range(7,12):
+            for ds in range(6,11):
                 with Timer('DOWNSAMPLED BY {ds}\n'.format_map(locals()),
                            print_func=log.write) as t:
-                    matrix = BrainMatrix('emd', downsample=ds, name='test')
+                    matrix = BrainMatrix('emd', downsample=ds, name='validation')
                     matrix.compute_distances(fold)
                     inconsistency = matrix.plot_dendrogram()
-                    stress = matrix.plot_mds()
+                    stress = matrix.plot_mds(metric=False)
                     data.append([ds, fold_id, t.elapsed, inconsistency, stress])
 
     df = pd.DataFrame(columns=['downsample', 'fold', 'time', 'inconsistency', 'stress'], data=data)

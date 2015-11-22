@@ -39,7 +39,7 @@ LOG.addHandler(logging.NullHandler())  # allows turning off logging alltogether
 
 printer = logging.StreamHandler()
 printer.setFormatter(logging.Formatter(
-                   datefmt='%X', fmt='[%(levelname)s]\t(%(asctime)s)`\t%(message)s'))
+                   datefmt='%X', fmt='[%(levelname)s]\t(%(asctime)s):\t%(message)s'))
 
 filer = logging.FileHandler('log.txt')
 filer.setFormatter(logging.Formatter(
@@ -48,7 +48,7 @@ filer.setFormatter(logging.Formatter(
 LOG.addHandler(filer)
 LOG.addHandler(printer)
 del filer
-#del printer
+del printer
 
 
 class BrainMatrix(dict):
@@ -169,16 +169,18 @@ class BrainMatrix(dict):
                           '\t({elapsed} seconds)').format(**locals()))
 
                 if i % 8 == 7:
-                    LOG.info('{} out of {} distances computed'.format(i, len(dists_to_compute)))
+                    LOG.info('{} out of {} distances computed'.format(i+1, len(dists_to_compute)))
                     if self.auto_save:
                         # Save data periodically to prevent catastrophic loss
                         # in the event of a crash.
                         self.save()
             pool.close()
+        LOG.warning('All {} distances computed.'.format(len(dists_to_compute)))
         if self.auto_save:
             self.save()
 
-    def plot_mds(self, features=None, interactive=False, dim=2, clustering=True, clusters=4):
+    def plot_mds(self, features=None, dim=2, metric=True,
+                 clustering=True, clusters=4, interactive=False):
         """Saves a scatterplot of the features projected onto 2 dimensions.
 
         Uses MDS to project features onto a 2 or 3 dimensional based on their
@@ -188,8 +190,9 @@ class BrainMatrix(dict):
         rotating the graph.
         """
         df = self.to_dataframe(features)
-        stress = plotting.mds(df, name=self.name, interactive=interactive, dim=dim,
-                              clustering=clustering, clusters=clusters)
+        stress = plotting.mds(df, name=self.name, dim=dim, metric=metric,
+                              clustering=clustering, clusters=clusters,
+                              interactive=interactive)
         return stress
 
     def plot_dendrogram(self, features=None, method='complete'):

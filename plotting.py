@@ -1,15 +1,12 @@
 from matplotlib import pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D  # used implicitly
-from mpl_toolkits.mplot3d import proj3d
 import numpy as np
 import os
-
-from sklearn import cluster as skcluster, manifold
-from scipy import cluster
+import sklearn
+import scipy
 
 labels_and_points = []  # a hack to get around namespace problems
 
-def mds(df, name="", dim=2, clustering=True, clusters=4, interactive=False):
+def mds(df, name="", dim=2, metric=True, clustering=True, clusters=4, interactive=False):
     """Saves a scatterplot of the items projected onto 2 dimensions.
 
     Uses MDS to project items onto a 2 or 3 dimensional based on their
@@ -22,14 +19,13 @@ def mds(df, name="", dim=2, clustering=True, clusters=4, interactive=False):
     plt.clf()
 
     if clustering:
-        clustering = skcluster.AgglomerativeClustering(
+        clustering = sklearn.cluster.AgglomerativeClustering(
                         linkage='complete', affinity='precomputed', n_clusters=clusters)
         assignments = clustering.fit_predict(df)
     
     if dim == 2:
-        mds = manifold.MDS(n_components=2, eps=1e-9, dissimilarity="precomputed")
+        mds = sklearn.manifold.MDS(n_components=2, metric=metric, eps=1e-9, dissimilarity="precomputed")
         points = mds.fit(df).embedding_
-
         plt.scatter(points[:,0], points[:,1], c=assignments, s=40)
         for label, x, y in zip(items, points[:, 0], points[:, 1]):
             plt.annotate(label, xy = (x, y), xytext = (-5, 5),
@@ -37,9 +33,11 @@ def mds(df, name="", dim=2, clustering=True, clusters=4, interactive=False):
     else:
         if dim is not 3:
             raise ValueError('dim must be 2 or 3. {} provided'.format(dim))
-        mds = manifold.MDS(n_components=3, eps=1e-9, dissimilarity="precomputed")
+        from mpl_toolkits.mplot3d import Axes3D  # used implicitly
+        from mpl_toolkits.mplot3d import proj3d
+            
+        mds = sklearn.manifold.MDS(n_components=3, metric=metric, eps=1e-9, dissimilarity="precomputed")
         points = mds.fit(df).embedding_
-
         fig = plt.figure()
         ax = fig.add_subplot(111, projection = '3d')
         xs, ys, zs = np.split(points, 3, axis=1)
@@ -53,7 +51,7 @@ def mds(df, name="", dim=2, clustering=True, clusters=4, interactive=False):
             label = plt.annotate(
                 feature, 
                 xy = (x2, y2), xytext = (-5, 5),
-                textcoords = 'offset points', ha = 'right', va = 'bottom',)
+                textcoords = 'offset points', ha = 'right', va = 'bottom')
             labels_and_points.append((label, x, y, z))
 
         def update_position(e):
@@ -82,15 +80,15 @@ def dendrogram(df, name="", method='complete'):
     items = df.index
     plt.clf()
 
-    clustering = cluster.hierarchy.linkage(df, method=method)
-    cluster.hierarchy.dendrogram(clustering, orientation='left', truncate_mode=None,
+    clustering = scipy.cluster.hierarchy.linkage(df, method=method)
+    scipy.cluster.hierarchy.dendrogram(clustering, orientation='left', truncate_mode=None,
                                  labels=items, color_threshold=0)
 
     plt.tight_layout()
 
     os.makedirs('figs', exist_ok=True)
     plt.savefig('figs/{}_dendrogram.png'.format(name))
-    return cluster.hierarchy.inconsistent(clustering)
+    return scipy.cluster.hierarchy.inconsistent(clustering)
 
 
 if __name__ == '__main__':
