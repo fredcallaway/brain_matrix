@@ -5,3 +5,5 @@ log.txt
 archive/
 brain_matrix.sublime-project
 brain_matrix.sublime-workspace
+*.pkl
+.ipynb_checkpoints/

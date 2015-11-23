@@ -2,7 +2,7 @@ from matplotlib import pyplot as plt
 import numpy as np
 import os
 import sklearn
-import scipy
+import scipy.cluster
 
 labels_and_points = []  # a hack to get around namespace problems
 
