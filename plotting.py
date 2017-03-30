@@ -3,10 +3,12 @@ import numpy as np
 import os
 import sklearn
 import scipy.cluster
+import seaborn as sns
 
 labels_and_points = []  # a hack to get around namespace problems
 
-def mds(df, name="", dim=2, metric=True, clustering=True, clusters=4, interactive=False):
+def mds(df, name="", dim=2, metric=True, clustering=True, clusters=4, interactive=False,
+        cmap='Set1'):
     """Saves a scatterplot of the items projected onto 2 dimensions.
 
     Uses MDS to project items onto a 2 or 3 dimensional based on their
@@ -26,10 +28,13 @@ def mds(df, name="", dim=2, metric=True, clustering=True, clusters=4, interactiv
     if dim == 2:
         mds = sklearn.manifold.MDS(n_components=2, metric=metric, eps=1e-9, dissimilarity="precomputed")
         points = mds.fit(df).embedding_
-        plt.scatter(points[:,0], points[:,1], c=assignments, s=40)
+        plt.scatter(points[:,0], points[:,1], c=assignments, cmap=cmap, s=40)
         for label, x, y in zip(items, points[:, 0], points[:, 1]):
             plt.annotate(label, xy = (x, y), xytext = (-5, 5),
                          textcoords = 'offset points', ha = 'right', va = 'bottom')
+        plt.xticks([])
+        plt.yticks([])
+        plt.gca().set_aspect('equal', 'datalim')
     else:
         if dim is not 3:
             raise ValueError('dim must be 2 or 3. {} provided'.format(dim))

@@ -14,7 +14,7 @@ import multiprocessing as mp
 import os
 import sys
 import time
-
+from tqdm import tqdm
 import joblib
 
 import nibabel as nib
@@ -34,7 +34,7 @@ from utils import lazy_property
 # INFO indicates results and run time of computations
 # CRITICAL indicates major results
 LOG = logging.getLogger()
-LOG.setLevel(logging.INFO)
+LOG.setLevel(logging.ERROR)
 LOG.addHandler(logging.NullHandler())  # allows turning off logging alltogether
 
 printer = logging.StreamHandler()
@@ -65,7 +65,7 @@ class BrainMatrix(dict):
       metric: 'emd' or a function that takes two 3D arrays as argument
         and returns a float.
       image_type (str): the statistical method for creating intensity values
-        in the image.
+        in the image, e.g. pAgF is p(activation|feature)
       downsample (float/int): the factor by which images are downsampled before
         distances are measured.
       image_transform (str): method of downsampling.
@@ -80,7 +80,8 @@ class BrainMatrix(dict):
 
     """
     def __init__(self, metric='emd', image_type='pAgF', name=None, multi=True,
-                 image_transform='block_reduce', downsample=8, auto_save=True):
+                 image_transform='block_reduce', downsample=8, auto_save=True,
+                 data=None):
         self.image_type = image_type
         self.multi = multi
         self.downsample = downsample
@@ -105,12 +106,19 @@ class BrainMatrix(dict):
         else:
             raise ValueError(('{image_transform} is not a valid'
                               'transform function').format(**locals()))
-        self.name = name if name else time.strftime('analysis_from_%m-%d_%H-%M-%S')
+        self.name = name if name else time.strftime('analysis_on_%m-%d_%H-%M-%S')
 
-        try:
-            self.data = Dataset.load('data/dataset.pkl')
-        except FileNotFoundError:
-            self.data = _getdata()
+        if isinstance(data, Dataset):
+            self.data = data
+        elif isinstance(data, str):
+            LOG.warning('Loading %s', data)
+            self.data = Dataset.load(data)
+        elif data is None:
+            try:
+                LOG.warning('Loading data/dataset.pkl')
+                self.data = Dataset.load('data/dataset.pkl')
+            except FileNotFoundError:
+                self.data = _getdata()
 
     @property
     def features(self):
@@ -155,31 +163,20 @@ class BrainMatrix(dict):
                 dist.distance = self.metric(*img_pairs[i])
         else:
             # equivalent to above, but with multiprocessing
-            pool = mp.Pool()
-            results = [pool.apply_async(self.metric, pair) for pair in img_pairs]
-
-            for i, dist in enumerate(dists_to_compute):
-                start = time.time()
-                # This line blocks until the result is returned by the worker.
-                dist.distance = results[i].get()
-
-                f1, f2 = dist.image1.feature, dist.image2.feature
-                elapsed = time.time() - start
-                LOG.info(('{f1} - {f2} [{self.metric}]: {dist.distance}' +
-                          '\t({elapsed} seconds)').format(**locals()))
-
-                if i % 8 == 7:
-                    LOG.info('{} out of {} distances computed'.format(i+1, len(dists_to_compute)))
-                    if self.auto_save:
-                        # Save data periodically to prevent catastrophic loss
-                        # in the event of a crash.
+            with mp.Pool() as pool, tqdm(total=len(dists_to_compute)) as pbar:
+                results = [pool.apply_async(self.metric, pair) for pair in img_pairs]
+                for i, dist in enumerate(dists_to_compute):
+                    dist.distance = results[i].get()  # blocks until the result is available
+                    pbar.update(1)
+                    if i % 8 == 7 and self.auto_save:
                         self.save()
-            pool.close()
+
         LOG.warning('All {} distances computed.'.format(len(dists_to_compute)))
         if self.auto_save:
             self.save()
 
-    def plot_mds(self, features=None, dim=2, metric=True,
+    def plot_mds(self, features=None,
+     dim=2, metric=True,
                  clustering=True, clusters=4, interactive=False):
         """Saves a scatterplot of the features projected onto 2 dimensions.
 
@@ -237,6 +234,9 @@ class BrainMatrix(dict):
         return ('BrainMatrix(image_type={image_type}, metric={metric},\n'
                 '            image_transform={image_transform}, downsample={downsample},\n'
                 '            name={name})').format(**self.__dict__)
+
+    def __repr__(self):
+        return str(self)
 
 
 class MetaImage(dict):
@@ -476,7 +476,7 @@ def _getdata():
     """Downloads data from neurosynth and returns it as a Dataset.
 
     Also pickles the dataset for future use."""
-    LOG.warning('Downloading and processing Neurosynth database')
+    LOG.warning('Downloading and processing Neurosynth database.')
     
     os.makedirs('data', exist_ok=True)
     from neurosynth.base.dataset import download

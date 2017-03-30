@@ -1,6 +1,6 @@
 # brain_matrix
 
-brain_matrix is a python package for distance metric oriented fMRI meta-analysis. The package provides one main class `BrainMatrix` which has fMRI images for rows and columns. The entries are distances between each images as defined by a given distance metric. By default, images are pulled from [Neurosynth](http://www.neurosynth.org) using keyword features like "semantic" or "anxiety". For a distance metric, we provide [Earth Movers Distance](
+brain_matrix is a python package for distance metric oriented fMRI meta-analysis. The package provides one main class `BrainMatrix` that represents a distance matrix over fMRI images. By default, images are pulled from [Neurosynth](http://www.neurosynth.org) using keyword features like "semantic" or "anxiety". For a distance metric, we provide [Earth Movers Distance](
 https://en.wikipedia.org/wiki/Earth_mover%27s_distance), a metric that has been successfully used to compare 2D images. However, one can also provide their own distance metric function.
 
 ## Usage
@@ -8,17 +8,17 @@ Using `BrainMatrix` is fairly straightforward. An example is the best explanatio
 
 ```python
 from brain_matrix import BrainMatrix
-
-if __name__ == '__main__':
-    # We use an excessively large downsample value for demonstration
-    matrix = BrainMatrix(downsample=30, name='example')
-    matrix.compute_distances(['syntactic', 'speech', 'semantic', 'music'])
-    print(matrix['semantic']['speech'].distance)
-    # distance matrix in csv form
-    matrix.write_csv()
-    # create some figure in figs/
-    matrix.plot_dendrogram()
-    matrix.plot_mds(clusters=2, dim=3, interactive=True)
+# Note: the neurosynth datbase will be downloaded on the first run, which
+# takes 5 minutes with a 13 Mbps connection.
+# We use an excessively large downsample value to make the demo run quickly.
+matrix = BrainMatrix(metric='emd', downsample=30, name='example')
+matrix.compute_distances(['syntactic', 'speech', 'semantic', 'music'])
+print(matrix['semantic']['speech'].distance)
+# distance matrix in csv form
+matrix.write_csv()
+# create some figure in figs/
+matrix.plot_dendrogram()
+matrix.plot_mds(clusters=2, dim=3, interactive=True)
 ```
 
 ## How does this work and why should I care?
