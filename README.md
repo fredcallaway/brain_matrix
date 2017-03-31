@@ -8,7 +8,7 @@ Using `BrainMatrix` is fairly straightforward. An example is the best explanatio
 
 ```python
 from brain_matrix import BrainMatrix
-# Note: the neurosynth datbase will be downloaded on the first run, which
+# Note: the neurosynth database will be downloaded on the first run, which
 # takes 5 minutes with a 13 Mbps connection.
 # We use an excessively large downsample value to make the demo run quickly.
 matrix = BrainMatrix(metric='emd', downsample=30, name='example')
@@ -21,28 +21,59 @@ matrix.plot_dendrogram()
 matrix.plot_mds(clusters=2, dim=3, interactive=True)
 ```
 
+A more detailed example can be found in [this notebook](example.ipynb).
+
 ## How does this work and why should I care?
-Most generally, this package allows the user to explore the similarity structure of cognitive activities in terms of their neural underpinnings. Given a set of cognitive activities, brain_matrix provides a scalar difference between any two activities. To facilitate understanding, these activities can then be embedded into a low dimensional space by multidimensional scaling. brain_matrix requires two independent pieces to provide this functionality:
+This package allows the user to explore the similarity structure of a set of fMRI images. Given a set of images, BrainMatrix computes the distance between each image with a user-specified distance metric. By applying Multidimensional scaling to the resulting distance matrix, we can construct a low dimensional *image-distance space*. Embedding the images into this space allows one to visualize and intuitively understand the similarity structure of those images.
 
-1. A mapping from cognitive activities onto three dimensional arrays (i.e. three dimensional images).
-2. A distance metric over three dimensional arrays such that distances in the image space reflect functional differences between the associated tasks.
+Importantly, image-distance space incorporates only the relative differences between images, not any information about the images themselves. Thus, the similarity structure of three images will vary depending upon what other images are included in the analysis. Although this behavior may seem undesirable, it is actually the main advantage of our approach. By looking only at the relative similarities between images, we abstract away from the complex relationship between brain structure and meaningful cognitive science concepts. To the extent that the fMRI images capture the cognitive concepts we are interested in, the dimensions of the associated image-distance space will capture those concepts as well. Specifically, Multidimensional scaling will find the dimensions that best capture the relative differences between the fMRI images associated with the cognitive concepts.
 
-fMRI images provide a clear option for (1). fMRI images are three dimensional arrays, where each element is a voxel, whose value reflects the activity level of the neurons in that location in the brain. If you have an fMRI scanner, you can create a mapping for any activity you can get a subject to do in the scanner. For the rest of us, brain_matrix provides an interface to Neurosynth, a meta-analysis platform. Neurosynth creates a meta-analytic fMRI image for a given keyword (e.g. "visual") by combining reported activations from papers in which the word ("visual") occurs frequently. Thus, we approximate a mapping from cognitive activities to brain activation with a mapping from words to activations reported in papers that contain those words.
 
-For (2) brain_matrix provide Earth Movers Distance, as implemented by [Ofir Pele and Michael Werman ](http://www.ariel.ac.il/sites/ofirpele/fastemd/), using a python wrapper developed by [Will Mayner](https://github.com/wmayner/pyemd). EMD is a powerful metric for measuring the distances between multidimensional arrays because it respects the array's internal structure. If we flattened an fMRI image into a long one dimensional array, we could use Euclidean distance, however this would treat all voxels as completely independent, ignoring brain structure. To calculate the EMD between two images, we use a distance metric over the elements of the images themselves: a _voxel metric_. Activation in unique, but similar voxels contributes less to the overall image distance than activation in dissimilar voxels. We use "similar" and "dissimilar" here rather than "close" and "far" because the voxel metric need not reflect physical distance.
+### Mapping cognitive concepts to fMRI images
+The most straightforward way to generate an fMRI image for a concept we are interested in is to run an fMRI study in which participants engage in a task that is though to relate to the given concept (e.g. listening to an audiobook if the concept of interest is language comprehension). However, this is a very expensive and time-intensive process that not all researchers have the resources to undertake.
 
-Recall from (2) that our image distance metric should be relevant to the cognitive tasks mapped onto each image. We will take as given the assumption underlying all fMRI research that the location and activity levels of neurons is functionally related to cognition. This assumption largely validates the use of EMD. However, we are left with the difficult task of choosing a voxel metric. _The degree to which EMD accurately reflects the functional differences of brain images is highly dependent on the degree to which our voxel metric reflects the functional differences of voxels._
+To make BrainMatrix accessible to researchers without their own fMRI data, the package provides an interface to the meta-analysis platform [Neurosynth](http://www.neurosynth.org). This platform uses natural language processing and statistical inference to map cognitive science terms to fMRI images. Concretely, Neurosynth creates a meta-analytic fMRI image for a given keyword (e.g. "visual") by combining all reported activations from papers in which the word ("visual") occurs frequently ([read more](http://neurosynth.org/faq/#q2)).
 
-The present implementation uses a simple and far from ideal voxel metric of Euclidean distance. That is, we assume that voxels are functionally similar to the degree to which they are spatially close. Superficially, this assumption is faulty because it ignores the physical structure of the brain, the gyri and sulci and whatnot. More seriously, however, this assumption ignores the connectivity structure of the brain. That is, two brain areas could be physically disparate, but functionally close if there is a fast path of communication between the two. _Creating a voxel metric based on connectivity rather than spatial distance would constitute a major improvement to this model._ Perhaps surprisingly, however, we find that this unsophisticated metric still gives highly intuitive results. This is likely because, in general, the brain attempts to minimize long range connections [citation neeeded].
 
-Given (1) a mapping from keywords to brain images, and (2) a distance metric over brain images, the workings of brain_matrix are straightforward. The user provides a list of keywords that Neurosynth has indexed ad brain_matrix fetches an image for each one, computing the distances between each pair. This results in a distance matrix, which is prepared for human consumption in two forms: a two or three dimensional plot via multidimensional scaling, and a dendrogram via hierarchical clustering.
+### Measuring the distance between fMRI images
+The key insight of BrainMatrix is to embed fMRI images into an *image-distance space* with cognitively meaningful dimensions. This requires specifying a distance metric.
 
-### Dendrogram
-![dendrogram](http://imgur.com/6DGITZ7.png)
+An fMRI image is a three dimensional array, where each element corresponds to a voxel (a small cube in the brain). The value of an element reflects the activity level of the neurons in that location in the brain. Perhaps the most straightforward distance metric is the Euclidean distance. However this treats all voxels as independent dimensions, ignoring the distance between the voxels themselves.
+
+We would like a metric that takes into account the spatial layout of each voxel; one such metric is the Earth Movers Distance (EMD).
+To intuitively understand EMD, imagine a two dimensional image is constructed physically as a grid with one location for each pixel, where we stack dirt in each grid location based on the intensity of the corresponding pixel.
+EMD is the amount of work it takes to transform one image into another by moving dirt within this grid, where work is defined as the amount of dirt moved multiplied by the distance it is moved.
+Thus, a pair of images with high pixel intensities in disparate locations will be judged as more different than a pair with high intensities in different, but nearby pixels.
+
+Complicating matters slightly, we see that EMD requires a distance metric of it's own.
+Because the pixels in fMRI images are voxels, we call this metric the _voxel metric_.
+Constructing an appropriate voxel metric is a significant challenge by itself. Ideally it would capture the details of brain structure (gyri and sulci and whatnot), perhaps even the functional connectivity among regions. Lacking the expertise necessary to construct such a metric, we use Euclidean distance in our examples. However, the package makes it straightforward for a researcher to use an anatomically informed metric.
+
+Our package uses the C++ implementation of Earth Movers Distance by [Ofir Pele and Michael Werman ](http://www.ariel.ac.il/sites/ofirpele/fastemd/), with a python wrapper developed by [Will Mayner](https://github.com/wmayner/pyemd). 
+
+
+
+http://ieeexplore.ieee.org/document/1453520/
+
+
+
+<!-- _The degree to which EMD accurately reflects the functional differences of brain images is highly dependent on the degree to which our voxel metric reflects the functional differences of voxels._ -->
+
+<!-- The present implementation uses a simple and far from ideal voxel metric of Euclidean distance. That is, we assume that voxels are functionally similar to the degree to which they are spatially close. Superficially, this assumption is faulty because it ignores the physical structure of the brain, the gyri and sulci and whatnot. More seriously, however, this assumption ignores the connectivity structure of the brain. That is, two brain areas could be physically disparate, but functionally close if there is a fast path of communication between the two. _Creating a voxel metric based on connectivity rather than spatial distance would constitute a major improvement to this model._ Perhaps surprisingly, however, we find that this unsophisticated metric still gives highly intuitive results. This is likely because, in general, the brain attempts to minimize long range connections [citation neeeded].
+ -->
+
+## Example results
+To demonstrate BrainMatrix in action, we constructed a matrix using `TODO` features from Neurosynth. Visualizations of this matrix are shown below.
 
 ### Multidimensional scaling
 ![mds](http://imgur.com/zfG13O7.png)
 
+### Dendrogram
+![dendrogram](http://imgur.com/6DGITZ7.png)
+
+
+
+<!-- 
 ## Process
 A rough description of the processing pipeline:
 
@@ -52,4 +83,4 @@ A rough description of the processing pipeline:
     - transform this image into a lower dimensional form using the `image_transform` function. This is a block reduction by default, but the user could provide an alternative (perhaps anatomically justified) transformation function.
 - for each pair of features
     - get the image associated with each feature
-    - compute the distance between the two features as defined by `metric`. By default, we use Earth Movers Distance. The user can provide her own function that two images in the form returned by `image_transform` (a three dimensional array by default).
+    - compute the distance between the two features as defined by `metric`. By default, we use Earth Movers Distance. The user can provide her own function that two images in the form returned by `image_transform` (a three dimensional array by  default). -->
