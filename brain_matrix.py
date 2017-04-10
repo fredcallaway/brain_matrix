@@ -140,7 +140,7 @@ class BrainMatrix(dict):
         df = pd.DataFrame.from_dict(data)
         return df
 
-    def compute_distances(self, features):
+    def compute_distances(self, features, processes=None):
         """Computes distance between each feature in `features`.
 
         Only computes distances that have not already been computed. Utilizes
@@ -163,7 +163,7 @@ class BrainMatrix(dict):
                 dist.distance = self.metric(*img_pairs[i])
         else:
             # equivalent to above, but with multiprocessing
-            with mp.Pool() as pool, tqdm(total=len(dists_to_compute)) as pbar:
+            with mp.Pool(processes) as pool, tqdm(total=len(dists_to_compute)) as pbar:
                 results = [pool.apply_async(self.metric, pair) for pair in img_pairs]
                 for i, dist in enumerate(dists_to_compute):
                     dist.distance = results[i].get()  # blocks until the result is available
@@ -231,9 +231,10 @@ class BrainMatrix(dict):
         return MetaImage(key, self)
 
     def __str__(self):
-        return ('BrainMatrix(image_type={image_type}, metric={metric},\n'
-                '            image_transform={image_transform}, downsample={downsample},\n'
-                '            name={name})').format(**self.__dict__)
+        return 'BrainMatrix(features={})'.format(list(self.features))
+        # return ('BrainMatrix(image_type={image_type}, metric={metric},\n'
+                # '            image_transform={image_transform}, downsample={downsample},\n'
+                # '            name={name})').format(**self.__dict__)
 
     def __repr__(self):
         return str(self)
