@@ -1,0 +1,72 @@
+.outline h1 {
+  /*margin: auto;*/
+  /*padding: 30px;*/
+}
+
+.reveal h3 {
+  color: #7D838E;
+}
+
+.one h1, .one h2 {
+  color: white;
+  background: #4767B0;
+  /*color: #4767B0;*/
+}
+.one strong {
+  color: #4767B0;
+}
+
+.two h1, .two h2 {
+  color: white;
+  background: #D83C48;
+  /*color: #65B55F;*/
+}
+.two .strong {
+  color: #D83C48;
+}
+.reveal .level1 h1 {
+  background: none;
+}
+
+.left-box {
+  width: 50%;
+  float: left;
+}
+.right-box {
+  width: 50%;
+  float: right;
+}
+
+img.stack {
+ position: absolute;
+ top: 0%;
+ right: 14%;
+}
+
+
+.reveal cite {
+  // position: absolute;
+  // right: 5%;
+  // bottom: -10%;
+  float: right;
+  text-align: right;
+  width: 100%;
+  margin-top: 10;
+  // border: thin black solid;
+  // margin-top: 10%;
+  // margin-right: 5%;
+  font-size: 70%;
+}
+
+.reveal section {
+  // height: 95%;
+  // border: thin blue solid;
+}
+
+.reveal iframe {
+  // border: thick black solid;
+  margin: 0;
+  padding: 0;
+  box-shadow: 6px 6px 20px #000;
+}
+.reveal ul {list-style-type: square;}

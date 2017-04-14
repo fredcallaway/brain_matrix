@@ -1,0 +1,89 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Slides</title><meta name="author" content="Fred Callaway"><link rel="stylesheet" href="css/reveal.css"><link rel="stylesheet" href="css/theme/white.css" id="theme"><link rel="stylesheet" href="css/style.css"><script src="lib/js/jquery.js"></script></head><body><div class="reveal"><div class="slides"><section class="center"><h1>Distance based fMRI meta-analysis</h1><h3>Fred Callaway</h3></section><section data-background="#BC3D4D"><section class="center"><h1>Motivation</h1></section><section data-transition="linear-in none-out"><img src="figs/motivation1.png"></section><section data-transition="none"><img src="figs/motivation2.png"></section></section><section data-background="#4a74ff"><section class="center"><h1>Methods</h1></section><section class="center"><img src="figs/method1.png"/></section><section><h2>Neurosynth</h2><i>text mining meets fMRI metanalysis</i><ol><li>find papers in which a term occurs frequently</li><li>extract reported activation peaks</li><li>combine into one image</li></ol><div><p>$$\Pr(\text{activation}|\text{term})$$</p>
+</div><cite>Yarkoni et al. (2011)</cite></section><section><div class="stretch"><iframe src="http://www.neurosynth.org/analyses/terms/working%20memory/" width="100%" height="100%"></iframe></div></section><section><h2>Earth Mover's Distance</h2><ul>
+<li>distance between two probability distributions</li>
+<li>minimum cost to convert $P$ to $Q$ by &quot;moving probability mass&quot;</li>
+</ul>
+<p>$$\min \sum_i^N \sum_j^N d_{ij} \ f_{ij}$$</p>
+</section><section class="center"><img src="figs/emd.svg"/></section><section class="center"><img src="figs/method1.png"/></section></section><section data-background="#fff"><section class="center"><h1>Results</h1></section><section class="center"><img src="figs/mds.svg"/></section><section class="center" data-background="#4a74ff"><img src="figs/method.png"/></section><section class="center"><img src="figs/words-brains.svg"/></section></section><section data-background="#000"><section class="center"><h1>Questions?</h1></section></section></div></div><script src="lib/js/head.min.js"></script><script src="js/reveal.js"></script><script src="js/multiplex.js"></script><script>(function() {
+  (function() {
+    var background, backgroundStyle, backgrounds, i, opacity, section, sections;
+    Reveal.initialize({
+      controls: false,
+      progress: false,
+      slideNumber: false,
+      history: true,
+      center: false,
+      maxScale: 1.5,
+      transition: 'linear',
+      transitionSpeed: 'default',
+      fragments: true,
+      theme: Reveal.getQueryHash().theme,
+      math: {
+        mathjax: 'https://cdn.mathjax.org/mathjax/latest/MathJax.js'
+      },
+      multiplex: {
+        secret: SECRET,
+        id: '80519760bbc84258',
+        url: 'https://reveal-js-multiplex-ccjbegmaii.now.sh'
+      },
+      dependencies: [
+        {
+          src: 'lib/js/classList.js',
+          condition: function() {
+            return !document.body.classList;
+          }
+        }, {
+          src: '//cdn.socket.io/socket.io-1.3.5.js',
+          async: true
+        }, {
+          src: 'plugin/multiplex/master.js',
+          async: true
+        }, {
+          src: "plugin/multiplex/" + (typeof SECRET !== "undefined" && SECRET !== null ? 'master' : 'client') + ".js",
+          async: true
+        }, {
+          src: 'plugin/highlight/highlight.js',
+          async: true,
+          callback: function() {
+            hljs.initHighlightingOnLoad();
+          }
+        }, {
+          src: 'plugin/zoom-js/zoom.js',
+          async: true
+        }, {
+          src: 'plugin/notes/notes.js',
+          async: true
+        }, {
+          src: 'plugin/math/math.js',
+          async: true
+        }
+      ]
+    });
+    sections = document.getElementsByTagName('section');
+    backgrounds = document.getElementsByClassName('slide-background');
+    i = 0;
+    while (i < sections.length) {
+      section = sections[i];
+      opacity = section.getAttribute('data-background-opacity');
+      if (!opacity) {
+        i++;
+        continue;
+      }
+      background = backgrounds[i];
+      backgroundStyle = background.getAttribute('style');
+      if (!backgroundStyle) {
+        backgroundStyle = '';
+      }
+      backgroundStyle = backgroundStyle + ';opacity: ' + opacity + ';';
+      background.setAttribute('style', backgroundStyle);
+      i++;
+    }
+    return Reveal.configure({
+      keyboard: {
+        13: 'next'
+      }
+    });
+  })();
+
+}).call(this);
+</script></body></html>

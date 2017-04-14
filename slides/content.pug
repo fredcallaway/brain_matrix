@@ -1,0 +1,55 @@
+-
+  color = {
+    result: '#fff',
+    motivation: '#BC3D4D',
+    method: '#4a74ff',
+  }
+
+
+section.center&attributes(TITLE)
+  h1 Distance based fMRI meta-analysis
+  h3 Fred Callaway
+
+
++section('Motivation', color.motivation)
+  section(data-transition='linear-in none-out')
+    img(src='figs/motivation1.png')
+  section(data-transition='none')
+    img(src='figs/motivation2.png')
+
++section('Methods', color.method)
+  +figure('method1.png')
+
+  section
+    h2 Neurosynth
+    i text mining meets fMRI metanalysis
+    ol
+      li find papers in which a term occurs frequently
+      li extract reported activation peaks
+      li combine into one image
+    
+    div
+      :markdown-it
+        $$\Pr(\text{activation}|\text{term})$$
+    cite Yarkoni et al. (2011)
+
+  +embed('http://www.neurosynth.org/analyses/terms/working%20memory/')
+  
+  section
+    h2 Earth Mover's Distance
+    :markdown-it
+      - distance between two probability distributions
+      - minimum cost to convert $P$ to $Q$ by "moving probability mass"
+
+      $$\min \sum_i^N \sum_j^N d_{ij} \ f_{ij}$$
+
+  +figure('emd.svg')
+
+  +figure('method1.png')
+
++section('Results', color.result)
+  +figure('mds.svg')
+  +figure('method.png', color.method)
+  +figure('words-brains.svg')
+
++section('Questions?', '#000')
