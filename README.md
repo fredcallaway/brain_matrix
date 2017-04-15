@@ -53,7 +53,7 @@ Our package uses the C++ implementation of Earth Movers Distance by [Ofir Pele a
 
 
 
-http://ieeexplore.ieee.org/document/1453520/
+<!-- http://ieeexplore.ieee.org/document/1453520/ -->
 
 
 
