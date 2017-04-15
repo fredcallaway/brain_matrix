@@ -24,6 +24,9 @@ matrix.plot_mds(clusters=2, dim=3, interactive=True)
 A more detailed example can be found in [this notebook](example.ipynb).
 
 ## How does this work and why should I care?
+
+[pipeline](figs/method-whitebg.png)
+
 This package allows the user to explore the similarity structure of a set of fMRI images. Given a set of images, BrainMatrix computes the distance between each image with a user-specified distance metric. By applying Multidimensional scaling to the resulting distance matrix, we can construct a low dimensional *image-distance space*. Embedding the images into this space allows one to visualize and intuitively understand the similarity structure of those images.
 
 Importantly, image-distance space incorporates only the relative differences between images, not any information about the images themselves. Thus, the similarity structure of three images will vary depending upon what other images are included in the analysis. Although this behavior may seem undesirable, it is actually the main advantage of our approach. By looking only at the relative similarities between images, we abstract away from the complex relationship between brain structure and meaningful cognitive science concepts. To the extent that the fMRI images capture the cognitive concepts we are interested in, the dimensions of the associated image-distance space will capture those concepts as well. Specifically, Multidimensional scaling will find the dimensions that best capture the relative differences between the fMRI images associated with the cognitive concepts.
