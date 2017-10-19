@@ -25,7 +25,7 @@ A more detailed example can be found in [this notebook](example.ipynb).
 
 ## How does this work and why should I care?
 
-[pipeline](figs/method-whitebg.png)
+![pipeline](figs/method-whitebg.png)
 
 This package allows the user to explore the similarity structure of a set of fMRI images. Given a set of images, BrainMatrix computes the distance between each image with a user-specified distance metric. By applying Multidimensional scaling to the resulting distance matrix, we can construct a low dimensional *image-distance space*. Embedding the images into this space allows one to visualize and intuitively understand the similarity structure of those images.
 
