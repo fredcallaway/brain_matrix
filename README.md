@@ -74,7 +74,8 @@ To demonstrate BrainMatrix in action, we constructed a matrix using `TODO` featu
 ### Dendrogram
 ![dendrogram](http://imgur.com/6DGITZ7.png)
 
-
+### Procrustes embedding of brain space and word space
+![words](/figs/words-brains.svg)
 
 <!-- 
 ## Process
